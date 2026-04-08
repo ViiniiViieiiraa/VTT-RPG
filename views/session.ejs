@@ -131,18 +131,27 @@
     </button>
     <!-- Névoa de Guerra -->
     <button class="hud-btn" id="btnFog">
-      <span class="hud-icon">👁</span><span>Névoa de Guerra</span>
+      <span class="hud-icon">🌫️</span><span>Névoa de Guerra</span>
     </button>
     <div class="fog-tool-panel hidden" id="fogToolPanel">
       <div class="fog-tools">
-        <button class="fog-tool active" data-tool="hide"   id="fogToolHide">⬛ Esconder</button>
-        <button class="fog-tool"        data-tool="reveal" id="fogToolReveal">⬜ Revelar</button>
+        <button class="fog-tool active" data-tool="hide" id="fogToolHide">⬛ Esconder</button>
+        <button class="fog-tool" data-tool="reveal" id="fogToolReveal">⬜ Revelar</button>
       </div>
-      <button class="hud-btn hud-btn--danger" id="btnFogClear" style="font-size:.7rem;padding:.35rem .6rem;">
-        <span class="hud-icon">✕</span><span>Limpar Névoa</span>
-      </button>
+      
+      <div style="display: flex; gap: 4px; margin-top: 4px;">
+        <button class="hud-btn" id="btnToggleFogView" title="Alternar Visão do Mestre" style="flex:1;">
+          <span class="hud-icon">👁️</span><span id="fogViewLabel">Ocultar Névoa</span>
+        </button>
+        <button class="hud-btn hud-btn--danger" id="btnFogClear" title="Resetar Tudo" style="width: 40px; justify-content: center;">
+          <span class="hud-icon">✕</span>
+        </button>
+      </div>
     </div>
   </div>
+
+
+  
 
   <div class="hud-divider"></div>
 

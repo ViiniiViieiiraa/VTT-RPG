@@ -338,3 +338,27 @@ html, body { overflow: hidden; height: 100%; width: 100%; user-select: none; }
   background: var(--accent-dim); border-color: rgba(201,168,76,.4);
   color: var(--accent);
 }
+
+/* Estilo da névoa cinza (nuvem) no canvas */
+#fogCanvas {
+  pointer-events: none; /* Só ativa eventos quando a ferramenta está aberta */
+  z-index: 5;
+  filter: contrast(120%) brightness(90%); /* Dá um aspecto menos chapado */
+}
+
+/* Classe aplicada aos tokens quando estão sob a névoa */
+.token-fog-hidden {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.3s ease;
+}
+
+/* Cursor especial para edição de névoa */
+#viewport.fog-mode-active { cursor: cell; }
+#viewport.fog-mode-active #fogCanvas { pointer-events: all; }
+
+/* Botão de visão do mestre ativo */
+#btnToggleFogView.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--accent);
+}

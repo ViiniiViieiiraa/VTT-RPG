@@ -31,6 +31,11 @@ const ui   = { gridVisible: false, mapLoaded: false };
 const CAMPAIGN_ID = window.CAMPAIGN_ID;
 let   activeSceneId = null;   // scene corrente
 
+let isFogEditing = false;
+let isDrawingFog = false;
+let fogTool = 'hide'; // 'hide' ou 'reveal'
+let masterFogVisible = true;
+
 // ══════════════════════════════════════════════
 // ELEMENTOS
 // ══════════════════════════════════════════════
@@ -87,6 +92,14 @@ const noteTitleInput = $('noteTitleInput');
 const notesArea      = $('notesArea');
 const notesSaved     = $('notesSaved');
 const btnDeleteNote  = $('btnDeleteNote');
+
+const btnFog = $('btnFog');
+const fogToolPanel = $('fogToolPanel');
+const btnToggleFogView = $('btnToggleFogView');
+const fogViewLabel = $('fogViewLabel');
+const btnFogClear = $('btnFogClear');
+const fogCanvas = $('fogCanvas');
+const fogCtx = fogCanvas ? fogCanvas.getContext('2d', { willReadFrequently: true }) : null;
 
 // ══════════════════════════════════════════════
 // CAMERA / TRANSFORM
@@ -253,7 +266,9 @@ async function loadScene(scene) {
       // Inicializa o Canvas da Névoa e restaura os desenhos salvos
       if (typeof initFogCanvas === 'function') initFogCanvas();
       if (typeof restoreFog === 'function') restoreFog(scene.id);
-      
+
+      initFogCanvas();
+      loadFog(scene.id);
       resetView();
     };
     mapImage.src = scene.image_url;
@@ -358,6 +373,24 @@ sfSubmit.addEventListener('click', async () => {
 // ══════════════════════════════════════════════
 // TOKENS — DOM
 // ══════════════════════════════════════════════
+function updateTokenVisibility() {
+  if (!fogCtx) return;
+  const tokens = document.querySelectorAll('.token');
+  tokens.forEach(tokenEl => {
+    const size = Number(tokenEl.dataset.size);
+    const half = (TOKEN_PX * size) / 2;
+    const cx = parseFloat(tokenEl.style.left) + half;
+    const cy = parseFloat(tokenEl.style.top) + half;
+
+    const pixel = fogCtx.getImageData(cx, cy, 1, 1).data;
+    const isUnderFog = pixel[3] > 0;
+
+    // Lógica alterada: Só esconde se estiver sob a névoa E a visão da névoa estiver ativa
+    const shouldHide = isUnderFog && masterFogVisible;
+    tokenEl.classList.toggle('token-fog-hidden', shouldHide);
+  });
+}
+
 function createTokenEl(token) {
   const px   = TOKEN_PX * token.size;
   const half = px / 2;
@@ -454,6 +487,7 @@ window.addEventListener('mouseup', async e => {
   viewport.classList.remove('token-drag');
   const tokenId = drag.id;
   drag.active = false; drag.el = null;
+  updateTokenVisibility();
 
   await fetch(`/tokens/${tokenId}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -551,6 +585,7 @@ async function restoreTokens() {
     const res    = await fetch(`/campaigns/${CAMPAIGN_ID}/tokens?scene_id=${activeSceneId}`);
     const tokens = await res.json();
     tokens.forEach(placeToken);
+    updateTokenVisibility();
   } catch (_) {}
 }
 
@@ -730,189 +765,144 @@ async function restoreNotes() {
 }
 
 // ══════════════════════════════════════════════
-// FOG OF WAR
+// FOG OF WAR — BRUSH SYSTEM
 // ══════════════════════════════════════════════
-/**
- * Camada: <canvas id="fogCanvas"> dentro do mapLayer.
- * O canvas tem as mesmas dimensões da imagem do mapa.
- * Modo HIDE: pinta retângulo preto opaco.
- * Modo REVEAL: apaga (globalCompositeOperation = 'destination-out').
- *
- * Persistência: cada shape é { x, y, w, h, mode } em coords do MAPA.
- * O servidor guarda na tabela fog_shapes (scene_id, x, y, w, h, mode).
- */
 
-const fogCanvas = $('fogCanvas');
-const fogCtx    = fogCanvas ? fogCanvas.getContext('2d') : null;
-
-const fogState = {
-  active:     false,   // modo névoa ligado?
-  tool:       'hide',  // 'hide' | 'reveal'
-  drawing:    false,
-  startX:     0,
-  startY:     0,
-  shapes:     [],      // [{ id, x, y, w, h, mode }]
-};
-
-const btnFog      = $('btnFog');
-const fogToolHide = $('fogToolHide');
-const fogToolReveal = $('fogToolReveal');
-const fogToolPanel  = $('fogToolPanel');
-const btnFogClear   = $('btnFogClear');
-
-// Inicializa canvas com dimensões do mapa
 function initFogCanvas() {
   if (!fogCanvas) return;
-  fogCanvas.width  = mapImage.naturalWidth;
+  fogCanvas.width = mapImage.naturalWidth;
   fogCanvas.height = mapImage.naturalHeight;
-  // Começa com névoa total
-  fogCtx.fillStyle = 'rgba(0,0,0,0.85)';
-  fogCtx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+  
+  // Limpa o canvas (Começa sem névoa como você pediu)
+  fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
+  
+  // Ajusta opacidade inicial baseada na visão do mestre
+  fogCanvas.style.opacity = masterFogVisible ? "1" : "0.3";
 }
 
-// Redesenha todos os shapes salvos
-function redrawFog() {
-  if (!fogCtx) return;
-  // Reseta: névoa total
-  fogCtx.globalCompositeOperation = 'source-over';
-  fogCtx.fillStyle = 'rgba(0,0,0,0.85)';
-  fogCtx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+function handleFogStroke(e) {
+  if (!isDrawingFog || !isFogEditing) return;
 
-  fogState.shapes.forEach(s => {
-    if (s.mode === 'reveal') {
-      fogCtx.globalCompositeOperation = 'destination-out';
-      fogCtx.clearRect(s.x, s.y, s.w, s.h);
-    } else {
-      fogCtx.globalCompositeOperation = 'source-over';
-      fogCtx.fillStyle = 'rgba(0,0,0,0.85)';
-      fogCtx.fillRect(s.x, s.y, s.w, s.h);
-    }
-  });
-  fogCtx.globalCompositeOperation = 'source-over';
-}
-
-// Toggle modo névoa
-if (btnFog) {
-  btnFog.addEventListener('click', () => {
-    fogState.active = !fogState.active;
-    btnFog.classList.toggle('active', fogState.active);
-    fogToolPanel?.classList.toggle('hidden', !fogState.active);
-    fogCanvas.style.pointerEvents = fogState.active ? 'all' : 'none';
-    // Mostra canvas quando modo ativo
-    fogCanvas.style.opacity = fogState.active || fogState.shapes.length ? '1' : '0';
-  });
-}
-
-// Seleção de ferramenta
-[fogToolHide, fogToolReveal].forEach(btn => {
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    fogState.tool = btn.dataset.tool;
-    fogToolHide?.classList.toggle('active',   fogState.tool === 'hide');
-    fogToolReveal?.classList.toggle('active', fogState.tool === 'reveal');
-  });
-});
-
-// Limpar névoa (revelar tudo)
-if (btnFogClear) {
-  btnFogClear.addEventListener('click', async () => {
-    fogState.shapes = [];
-    redrawFog();
-    if (activeSceneId) {
-      await fetch(`/scenes/${activeSceneId}/fog`, { method: 'DELETE' });
-    }
-  });
-}
-
-// ── Desenho no canvas ─────────────────────────
-// Converte evento do canvas → coords do mapa
-function canvasEventToMap(e) {
   const rect = fogCanvas.getBoundingClientRect();
-  // rect já está escalado pelo cam.scale via CSS transform do mapLayer
-  return {
-    x: (e.clientX - rect.left)  / cam.scale,
-    y: (e.clientY - rect.top)   / cam.scale,
-  };
-}
+  const x = (e.clientX - rect.left) / cam.scale;
+  const y = (e.clientY - rect.top) / cam.scale;
 
-fogCanvas?.addEventListener('mousedown', e => {
-  if (e.button !== 0 || !fogState.active) return;
-  e.stopPropagation();
-  const p = canvasEventToMap(e);
-  fogState.drawing = true;
-  fogState.startX  = p.x;
-  fogState.startY  = p.y;
-});
+  fogCtx.lineWidth = 80; // Tamanho do pincel
+  fogCtx.lineCap = 'round';
+  fogCtx.lineJoin = 'round';
 
-fogCanvas?.addEventListener('mousemove', e => {
-  if (!fogState.drawing) return;
-  const p = canvasEventToMap(e);
-  // Preview: redesenha + rect atual
-  redrawFog();
-  const rx = Math.min(fogState.startX, p.x);
-  const ry = Math.min(fogState.startY, p.y);
-  const rw = Math.abs(p.x - fogState.startX);
-  const rh = Math.abs(p.y - fogState.startY);
-  if (fogState.tool === 'reveal') {
-    fogCtx.globalCompositeOperation = 'destination-out';
-    fogCtx.clearRect(rx, ry, rw, rh);
+  if (fogTool === 'hide') {
     fogCtx.globalCompositeOperation = 'source-over';
+    fogCtx.fillStyle = "#1a1a1d"; // Cor da névoa
+    fogCtx.strokeStyle = "#1a1a1d";
   } else {
-    // Preview com borda vermelha
-    fogCtx.fillStyle = 'rgba(0,0,0,0.85)';
-    fogCtx.fillRect(rx, ry, rw, rh);
-    fogCtx.strokeStyle = 'rgba(224,82,82,0.6)';
-    fogCtx.lineWidth   = 2 / cam.scale;
-    fogCtx.strokeRect(rx, ry, rw, rh);
+    // Modo borracha
+    fogCtx.globalCompositeOperation = 'destination-out';
   }
-});
 
-window.addEventListener('mouseup', async e => {
-  if (!fogState.drawing || e.button !== 0) return;
-  fogState.drawing = false;
+  fogCtx.lineTo(x, y);
+  fogCtx.stroke();
+  fogCtx.beginPath();
+  fogCtx.moveTo(x, y);
+}
 
-  const rect = fogCanvas.getBoundingClientRect();
-  const ex   = (e.clientX - rect.left) / cam.scale;
-  const ey   = (e.clientY - rect.top)  / cam.scale;
+async function saveFog() {
+  if (!activeSceneId) return;
+  // Converte o desenho atual em uma string de imagem (Base64)
+  const dataURL = fogCanvas.toDataURL(); 
+  
+  await fetch(`/scenes/${activeSceneId}/fog`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_data: dataURL }),
+  });
+}
 
-  const x = Math.round(Math.min(fogState.startX, ex));
-  const y = Math.round(Math.min(fogState.startY, ey));
-  const w = Math.round(Math.abs(ex - fogState.startX));
-  const h = Math.round(Math.abs(ey - fogState.startY));
-
-  if (w < 4 || h < 4) { redrawFog(); return; }
-
-  const shape = { x, y, w, h, mode: fogState.tool };
-  fogState.shapes.push(shape);
-  redrawFog();
-
-  // Persiste
-  if (activeSceneId) {
-    try {
-      const res  = await fetch(`/scenes/${activeSceneId}/fog`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(shape),
-      });
-      const data = await res.json();
-      shape.id = data.id;
-    } catch (_) {}
-  }
-});
-
-// Restaura névoa da cena
-async function restoreFog(sceneId) {
-  fogState.shapes = [];
+async function loadFog(sceneId) {
   if (!fogCtx) return;
   try {
-    const res    = await fetch(`/scenes/${sceneId}/fog`);
-    const shapes = await res.json();
-    fogState.shapes = shapes;
-    redrawFog();
-    if (shapes.length > 0) fogCanvas.style.opacity = '1';
-  } catch (_) {}
+    const res = await fetch(`/scenes/${sceneId}/fog`);
+    const data = await res.json();
+
+    if (data && data.image_data) {
+      const img = new Image();
+      img.onload = () => {
+        fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
+        fogCtx.drawImage(img, 0, 0);
+        updateTokenVisibility();
+      };
+      img.src = data.image_data;
+    } else {
+      // Se não houver dados, limpa o canvas
+      fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
+      updateTokenVisibility();
+    }
+  } catch (err) {
+    console.error("Erro ao carregar névoa:", err);
+  }
 }
 
+// ── Eventos de UI ──
 
+btnFog.addEventListener('click', () => {
+  isFogEditing = !isFogEditing;
+  btnFog.classList.toggle('active', isFogEditing);
+  fogToolPanel.classList.toggle('hidden', !isFogEditing);
+  viewport.classList.toggle('fog-mode-active', isFogEditing);
+  
+  fogCanvas.style.pointerEvents = isFogEditing ? 'all' : 'none';
+});
+
+document.querySelectorAll('.fog-tool').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.fog-tool').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    fogTool = btn.dataset.tool;
+  });
+});
+
+btnToggleFogView.addEventListener('click', () => {
+  masterFogVisible = !masterFogVisible;
+  fogCanvas.style.opacity = masterFogVisible ? "1" : "0.3";
+  btnToggleFogView.classList.toggle('active', !masterFogVisible);
+  fogViewLabel.innerText = masterFogVisible ? "Ocultar Névoa" : "Exibir Névoa";
+
+  updateTokenVisibility();
+});
+
+btnFogClear.addEventListener('click', async () => {
+  if (confirm("Limpar toda a névoa desta cena?")) {
+    fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
+    updateTokenVisibility();
+
+    await saveFog(); 
+  }
+});
+
+// ── Eventos de Desenho ──
+
+fogCanvas.addEventListener('mousedown', (e) => {
+  if (!isFogEditing || e.button !== 0) return;
+  isDrawingFog = true;
+  
+  const rect = fogCanvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / cam.scale;
+  const y = (e.clientY - rect.top) / cam.scale;
+  
+  fogCtx.beginPath();
+  fogCtx.moveTo(x, y);
+});
+
+window.addEventListener('mousemove', handleFogStroke);
+
+window.addEventListener('mouseup', () => {
+  if (isDrawingFog) {
+    isDrawingFog = false;
+    updateTokenVisibility();
+    
+    saveFog();
+  }
+});
 
 // ══════════════════════════════════════════════
 // INIT
