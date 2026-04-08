@@ -406,9 +406,37 @@ function createTokenEl(token) {
   el.style.setProperty('--token-color', token.color);
   el.style.setProperty('--sz', px + 'px');
 
+  // Build token image or initial
+  const imgHtml = token.image_url
+    ? `<img src="${token.image_url}" alt="" class="token-img">`
+    : `<span class="token-initial">${token.name.charAt(0).toUpperCase()}</span>`;
+
+  // HP bar (only if max_hp defined)
+  const hpHtml = (token.max_hp > 0) ? (() => {
+    const pct   = Math.max(0, Math.min(100, ((token.current_hp ?? token.max_hp) / token.max_hp) * 100));
+    const color = pct > 60 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
+    return `<div class="token-hp-bar"><div class="token-hp-fill" style="width:${pct}%;background:${color}"></div></div>`;
+  })() : '';
+
+  // Condition badges
+  const COND_ICONS = {
+    blinded:'👁️', charmed:'💞', deafened:'🔇', exhaustion:'😴',
+    frightened:'😱', grappled:'🤼', incapacitated:'❌', invisible:'👻',
+    paralyzed:'⚡', petrified:'🪨', poisoned:'🤢', prone:'⬇️',
+    restrained:'🕸️', stunned:'💫', unconscious:'💀',
+  };
+  let conditions = [];
+  try { conditions = token.conditions ? JSON.parse(token.conditions) : []; } catch(_){}
+  const condHtml = conditions.length > 0
+    ? `<div class="token-conditions">${conditions.slice(0,5).map(c =>
+        `<span class="token-condition-badge" title="${c}">${COND_ICONS[c]||'?'}</span>`).join('')}</div>`
+    : '';
+
   el.innerHTML = `
-    <span class="token-initial">${token.name.charAt(0).toUpperCase()}</span>
-    <span class="token-label">${token.name}</span>`;
+    ${imgHtml}
+    <span class="token-label">${token.name}</span>
+    ${hpHtml}
+    ${condHtml}`;
 
   // ── Drag ────────────────────────────────────
   el.addEventListener('mousedown', e => {
@@ -903,6 +931,61 @@ window.addEventListener('mouseup', () => {
     saveFog();
   }
 });
+
+// ══════════════════════════════════════════════
+// EXPOSE TO gallery.js / sheet.js
+// ══════════════════════════════════════════════
+window.getActiveSceneId    = () => activeSceneId;
+window.getCtxTargetId      = () => ctxTargetId;
+window.closeCtxMenuGlobal  = closeCtxMenu;
+
+/** Called by gallery.js after creating a token instance via API */
+window.placeTokenFromGallery = (token) => {
+  // Center on current viewport
+  const rect   = viewport.getBoundingClientRect();
+  const center = screenToMap(rect.width / 2, rect.height / 2);
+  const snapped = snapPosition(center.x, center.y, token.size);
+  token.pos_x = snapped.x;
+  token.pos_y = snapped.y;
+  // Update server with centered position
+  fetch(`/tokens/${token.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pos_x: snapped.x, pos_y: snapped.y }),
+  });
+  placeToken(token);
+};
+
+/** Called by sheet.js when HP changes */
+window.updateTokenHp = (tokenId, current, max) => {
+  const el  = tokenLayer.querySelector(`[data-id="${tokenId}"]`);
+  const bar = el?.querySelector('.token-hp-fill');
+  const pct = max > 0 ? Math.max(0, Math.min(100, (current / max) * 100)) : 0;
+  if (bar) {
+    bar.style.width      = pct + '%';
+    bar.style.background = pct > 60 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
+  }
+};
+
+/** Called by sheet.js when conditions change */
+window.updateTokenConditions = (tokenId, conditions) => {
+  const el   = tokenLayer.querySelector(`[data-id="${tokenId}"]`);
+  if (!el) return;
+  let badges = el.querySelector('.token-conditions');
+  if (!badges) {
+    badges = document.createElement('div');
+    badges.className = 'token-conditions';
+    el.appendChild(badges);
+  }
+  const COND_ICONS = {
+    blinded:'👁️', charmed:'💞', deafened:'🔇', exhaustion:'😴',
+    frightened:'😱', grappled:'🤼', incapacitated:'❌', invisible:'👻',
+    paralyzed:'⚡', petrified:'🪨', poisoned:'🤢', prone:'⬇️',
+    restrained:'🕸️', stunned:'💫', unconscious:'💀',
+  };
+  badges.innerHTML = (conditions||[]).slice(0,5).map(c =>
+    `<span class="token-condition-badge" title="${c}">${COND_ICONS[c]||'?'}</span>`
+  ).join('');
+};
 
 // ══════════════════════════════════════════════
 // INIT

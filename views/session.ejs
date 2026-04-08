@@ -1,5 +1,5 @@
 <%- include('partials/header', { title: campaign.name, extraCss: 'session.css', extraJs: undefined }) %>
-
+<link rel="stylesheet" href="/css/gallery.css">
 <!-- ── VIEWPORT ─────────────────────────────────── -->
 <div id="viewport">
   <div id="mapLayer">
@@ -150,9 +150,6 @@
     </div>
   </div>
 
-
-  
-
   <div class="hud-divider"></div>
 
   <div class="hud-zoom-info">
@@ -165,6 +162,106 @@
   </a>
 
 </aside>
+
+<!-- ── GALLERY TOGGLE (right edge) ──────────── -->
+<button class="gallery-toggle" id="btnGalleryToggle" title="Galeria de Tokens">
+  <span>AAAAAAAAAAAAAAAAAAAAA</span>
+</button>
+
+<!-- ── GALLERY SIDEBAR (right) ──────────────── -->
+<aside class="gallery-sidebar" id="gallerySidebar">
+  <div class="gallery-header">
+    <span class="gallery-title">⚄ Galeria</span>
+    <button class="drawer-close" id="btnGalleryClose">✕</button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="gallery-tabs">
+    <button class="gtab active" data-cat="player">Jogadores</button>
+    <button class="gtab" data-cat="npc">NPCs</button>
+    <button class="gtab" data-cat="enemy">Inimigos</button>
+  </div>
+
+  <!-- Template list (rendered per tab) -->
+  <div class="gallery-list" id="galleryList"></div>
+
+  <!-- New template form -->
+  <div class="gallery-footer">
+    <button class="hud-btn hud-btn--accent" id="btnNewTemplate">
+      <span class="hud-icon">＋</span><span>Novo Template</span>
+    </button>
+  </div>
+</aside>
+
+<!-- ── TEMPLATE FORM MODAL ───────────────────── -->
+<div class="modal-backdrop hidden" id="tplModalBackdrop">
+  <div class="tpl-modal">
+    <div class="tpl-modal-header">
+      <span id="tplModalTitle">Novo Template</span>
+      <button class="drawer-close" id="btnTplModalClose">✕</button>
+    </div>
+    <div class="tpl-modal-body">
+      <label class="field">
+        <span>Nome *</span>
+        <input class="tf-input" id="tplName" type="text" placeholder="Goblin Arqueiro" maxlength="50" autocomplete="off">
+      </label>
+      <div class="tpl-row">
+        <label class="field" style="flex:1">
+          <span>Categoria</span>
+          <select class="tf-input" id="tplCategory">
+            <option value="player">Jogador</option>
+            <option value="npc" selected>NPC</option>
+            <option value="enemy">Inimigo</option>
+          </select>
+        </label>
+        <label class="field" style="flex:1">
+          <span>Tamanho</span>
+          <select class="tf-input" id="tplSize">
+            <option value="1x1" selected>1×1 Pequeno</option>
+            <option value="2x2">2×2 Grande</option>
+            <option value="3x3">3×3 Enorme</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">
+        <span>Cor</span>
+        <div class="tpl-swatches" id="tplSwatches"></div>
+      </label>
+      <label class="field">
+        <span>Imagem (URL ou base64)</span>
+        <div style="display:flex;gap:.5rem;">
+          <input class="tf-input" id="tplImageUrl" type="text" placeholder="https://… ou deixe vazio" style="flex:1">
+          <label class="hud-btn hud-btn--file" style="width:auto;white-space:nowrap">
+            <input type="file" id="tplImageFile" accept="image/*" hidden>
+            📁
+          </label>
+        </div>
+      </label>
+      <label class="field">
+        <span>HP Máximo (padrão)</span>
+        <input class="tf-input" id="tplMaxHp" type="number" min="0" placeholder="0 = sem barra">
+      </label>
+    </div>
+    <div class="tpl-modal-footer">
+      <button class="hud-btn" id="btnTplModalCancel">Cancelar</button>
+      <button class="hud-btn hud-btn--accent" id="btnTplModalSave">Salvar Template</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── CHARACTER SHEET PANEL ─────────────────── -->
+<div class="sheet-panel hidden" id="sheetPanel">
+  <div class="sheet-panel-header">
+    <span class="sheet-panel-title" id="sheetPanelTitle">Ficha</span>
+    <div style="display:flex;align-items:center;gap:.6rem;">
+      <span class="notes-saved" id="sheetSaved"></span>
+      <button class="drawer-close" id="btnSheetClose">✕</button>
+    </div>
+  </div>
+  <div class="sheet-body" id="sheetBody">
+    <!-- Renderizado dinamicamente por sheet.js -->
+  </div>
+</div>
 
 <!-- ── LOG DRAWER ─────────────────────────────────── -->
 <div class="side-drawer" id="logDrawer">
@@ -204,6 +301,8 @@
 
 <!-- ── CONTEXT MENU ────────────────────────────────── -->
 <div class="ctx-menu hidden" id="ctxMenu">
+  <button class="ctx-item" id="ctxOpenSheet">📋 Abrir Ficha</button>
+  <div style="height:1px;background:rgba(255,255,255,.07);margin:.25rem 0;"></div>
   <button class="ctx-item ctx-item--danger" id="ctxDelete">✕ Excluir Token</button>
 </div>
 
@@ -216,4 +315,6 @@
 
 <script>window.CAMPAIGN_ID = '<%= campaign.id %>';</script>
 <script src="/js/tabletop.js" type="module"></script>
+<script src="/js/gallery.js" type="module"></script>
+<script src="/js/sheet.js"   type="module"></script>
 <%- include('partials/footer', {}) %>

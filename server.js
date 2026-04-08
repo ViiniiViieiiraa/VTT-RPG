@@ -18,6 +18,10 @@ function migrate() {
     ['campaigns', 'map_url TEXT'],
     ['campaigns', 'notes TEXT'],
     ['tokens',    'scene_id INTEGER'],
+    ['tokens',    'template_id INTEGER'],
+    ['tokens',    'current_hp INTEGER'],
+    ['tokens',    'max_hp INTEGER'],
+    ['tokens',    'conditions TEXT'],
     ['scenes',    'fog_data TEXT'],
   ];
   cols.forEach(([tbl, col]) => {
@@ -41,6 +45,18 @@ function migrate() {
     content TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS token_templates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL,
+    category    TEXT    NOT NULL DEFAULT 'npc',
+    subcategory TEXT    NOT NULL DEFAULT '1x1',
+    color       TEXT    NOT NULL DEFAULT '#9b5de5',
+    image_url   TEXT,
+    sheet_data  TEXT,
+    created_at  TEXT    DEFAULT (datetime('now'))
   )`);
 }
 
@@ -234,6 +250,85 @@ app.post('/scenes/:id/fog', (req, res) => {
 // Opcional: Rota de delete se quiser limpar tudo via API
 app.delete('/scenes/:id/fog', (req, res) => {
   db.run('UPDATE scenes SET fog_data = NULL WHERE id = ?', [req.params.id]);
+  res.json({ ok: true });
+});
+
+/* ─── TOKEN TEMPLATES ────────────────────────────────────── */
+
+app.get('/campaigns/:id/templates', (req, res) => {
+  const rows = db.all(
+    'SELECT * FROM token_templates WHERE campaign_id = ? ORDER BY category, name ASC',
+    [req.params.id]
+  );
+  res.json(rows);
+});
+
+app.post('/campaigns/:id/templates', (req, res) => {
+  const { name, category, subcategory, color, image_url, sheet_data } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'name required' });
+  const result = db.run(
+    'INSERT INTO token_templates (campaign_id,name,category,subcategory,color,image_url,sheet_data) VALUES (?,?,?,?,?,?,?)',
+    [req.params.id, name.trim(), category||'npc', subcategory||'1x1',
+     color||'#9b5de5', image_url||null, sheet_data ? JSON.stringify(sheet_data) : null]
+  );
+  const tpl = db.get('SELECT * FROM token_templates WHERE id=?', [result.lastInsertRowid]);
+  res.json(tpl);
+});
+
+app.patch('/templates/:id', (req, res) => {
+  const { name, category, subcategory, color, image_url, sheet_data } = req.body;
+  const tpl = db.get('SELECT * FROM token_templates WHERE id=?', [req.params.id]);
+  if (!tpl) return res.status(404).json({ error: 'not found' });
+  db.run(
+    'UPDATE token_templates SET name=?,category=?,subcategory=?,color=?,image_url=?,sheet_data=? WHERE id=?',
+    [name??tpl.name, category??tpl.category, subcategory??tpl.subcategory,
+     color??tpl.color, image_url??tpl.image_url,
+     sheet_data !== undefined ? JSON.stringify(sheet_data) : tpl.sheet_data,
+     req.params.id]
+  );
+  res.json({ ok: true });
+});
+
+app.delete('/templates/:id', (req, res) => {
+  db.run('DELETE FROM token_templates WHERE id=?', [req.params.id]);
+  res.json({ ok: true });
+});
+
+/* ─── TOKEN INSTANCE — sheet + HP + conditions ───────────── */
+
+app.get('/tokens/:id/sheet', (req, res) => {
+  const token = db.get('SELECT * FROM tokens WHERE id=?', [req.params.id]);
+  if (!token) return res.status(404).json({ error: 'not found' });
+  let sheet = {};
+  if (token.template_id) {
+    const tpl = db.get('SELECT sheet_data FROM token_templates WHERE id=?', [token.template_id]);
+    if (tpl?.sheet_data) try { sheet = JSON.parse(tpl.sheet_data); } catch(_){}
+  }
+  res.json({
+    token,
+    sheet,
+    current_hp:  token.current_hp,
+    max_hp:      token.max_hp,
+    conditions:  token.conditions ? JSON.parse(token.conditions) : [],
+  });
+});
+
+app.patch('/tokens/:id/sheet', (req, res) => {
+  const { current_hp, max_hp, conditions, sheet_data } = req.body;
+  const token = db.get('SELECT * FROM tokens WHERE id=?', [req.params.id]);
+  if (!token) return res.status(404).json({ error: 'not found' });
+
+  // Update instance HP/conditions
+  db.run('UPDATE tokens SET current_hp=?,max_hp=?,conditions=? WHERE id=?',
+    [current_hp??token.current_hp, max_hp??token.max_hp,
+     conditions !== undefined ? JSON.stringify(conditions) : token.conditions,
+     req.params.id]);
+
+  // Persist sheet_data back to template if linked
+  if (sheet_data && token.template_id) {
+    db.run('UPDATE token_templates SET sheet_data=? WHERE id=?',
+      [JSON.stringify(sheet_data), token.template_id]);
+  }
   res.json({ ok: true });
 });
 
