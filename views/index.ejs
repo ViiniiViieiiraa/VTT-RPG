@@ -1,0 +1,146 @@
+<%- include('partials/header', { title: 'Campanhas', extraCss: undefined, extraJs: undefined }) %>
+
+<div class="noise"></div>
+
+<main class="dashboard">
+
+  <header class="dash-header">
+    <div class="dash-brand">
+      <span class="brand-rune">⚔</span>
+      <div>
+        <h1 class="brand-title">VTT</h1>
+        <p class="brand-sub">Virtual Tabletop</p>
+      </div>
+    </div>
+    <button class="btn-primary" id="openModal">
+      <span>+</span> Nova Campanha
+    </button>
+  </header>
+
+  <section class="campaigns-grid" id="campaignsGrid">
+    <% if (campaigns.length === 0) { %>
+      <div class="empty-state">
+        <div class="empty-rune">🎲</div>
+        <p>Nenhuma campanha ainda.</p>
+        <small>Crie sua primeira aventura.</small>
+      </div>
+    <% } %>
+
+    <% campaigns.forEach(c => { %>
+      <article class="campaign-card" data-id="<%= c.id %>">
+        <div class="card-glow"></div>
+        <div class="card-body">
+          <div class="card-meta">
+            <time><%= new Date(c.created_at).toLocaleDateString('pt-BR') %></time>
+          </div>
+          <h2 class="card-title"><%= c.name %></h2>
+          <p class="card-desc"><%= c.description || 'Sem descrição.' %></p>
+        </div>
+        <div class="card-actions">
+          <a href="/session/<%= c.id %>" class="btn-enter">
+            Entrar <span>→</span>
+          </a>
+          <button class="btn-delete" data-id="<%= c.id %>" title="Excluir">✕</button>
+        </div>
+      </article>
+    <% }) %>
+  </section>
+
+</main>
+
+<!-- MODAL -->
+<div class="modal-overlay hidden" id="modalOverlay">
+  <div class="modal-glass">
+    <div class="modal-header">
+      <h2>Nova Campanha</h2>
+      <button class="modal-close" id="closeModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="field">
+        <span>Nome *</span>
+        <input type="text" id="inputName" placeholder="A Maldição de Strahd…" autocomplete="off" maxlength="80">
+      </label>
+      <label class="field">
+        <span>Descrição</span>
+        <textarea id="inputDesc" rows="3" placeholder="Uma breve sinopse da aventura…" maxlength="300"></textarea>
+      </label>
+      <p class="modal-error hidden" id="modalError">Nome é obrigatório.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" id="cancelModal">Cancelar</button>
+      <button class="btn-primary" id="submitCampaign">Criar Campanha</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const overlay      = document.getElementById('modalOverlay');
+const openBtn      = document.getElementById('openModal');
+const closeBtn     = document.getElementById('closeModal');
+const cancelBtn    = document.getElementById('cancelModal');
+const submitBtn    = document.getElementById('submitCampaign');
+const nameInput    = document.getElementById('inputName');
+const descInput    = document.getElementById('inputDesc');
+const errorMsg     = document.getElementById('modalError');
+const grid         = document.getElementById('campaignsGrid');
+
+const openModal  = () => { overlay.classList.remove('hidden'); nameInput.focus(); };
+const closeModal = () => { overlay.classList.add('hidden'); nameInput.value = ''; descInput.value = ''; errorMsg.classList.add('hidden'); };
+
+openBtn.addEventListener('click', openModal);
+closeBtn.addEventListener('click', closeModal);
+cancelBtn.addEventListener('click', closeModal);
+overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+submitBtn.addEventListener('click', async () => {
+  const name = nameInput.value.trim();
+  if (!name) { errorMsg.classList.remove('hidden'); return; }
+  errorMsg.classList.add('hidden');
+  submitBtn.disabled = true;
+
+  const res  = await fetch('/campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description: descInput.value.trim() }) });
+  const data = await res.json();
+  submitBtn.disabled = false;
+
+  if (res.ok) {
+    closeModal();
+    injectCard(data);
+    document.querySelector('.empty-state')?.remove();
+  }
+});
+
+function injectCard({ id, name, description }) {
+  const article = document.createElement('article');
+  article.className = 'campaign-card entering';
+  article.dataset.id = id;
+  article.innerHTML = `
+    <div class="card-glow"></div>
+    <div class="card-body">
+      <div class="card-meta"><time>${new Date().toLocaleDateString('pt-BR')}</time></div>
+      <h2 class="card-title">${name}</h2>
+      <p class="card-desc">${description || 'Sem descrição.'}</p>
+    </div>
+    <div class="card-actions">
+      <a href="/session/${id}" class="btn-enter">Entrar <span>→</span></a>
+      <button class="btn-delete" data-id="${id}" title="Excluir">✕</button>
+    </div>`;
+  grid.prepend(article);
+  requestAnimationFrame(() => article.classList.remove('entering'));
+  bindDelete(article.querySelector('.btn-delete'));
+}
+
+function bindDelete(btn) {
+  btn.addEventListener('click', async () => {
+    const id   = btn.dataset.id;
+    const card = document.querySelector(`.campaign-card[data-id="${id}"]`);
+    card.classList.add('removing');
+    await fetch(`/campaigns/${id}`, { method: 'DELETE' });
+    card.addEventListener('transitionend', () => card.remove());
+  });
+}
+
+document.querySelectorAll('.btn-delete').forEach(bindDelete);
+</script>
+
+<%- include('partials/footer', {}) %>

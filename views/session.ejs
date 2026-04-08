@@ -1,0 +1,210 @@
+<%- include('partials/header', { title: campaign.name, extraCss: 'session.css', extraJs: undefined }) %>
+
+<!-- ── VIEWPORT ─────────────────────────────────── -->
+<div id="viewport">
+  <div id="mapLayer">
+    <div id="gridOverlay"></div>
+    <img id="mapImage" src="" alt="" draggable="false">
+    <div id="tokenLayer"></div>
+    <!-- Fog of War: canvas dentro do mapLayer (segue pan/zoom) -->
+    <canvas id="fogCanvas" style="position:absolute;top:0;left:0;pointer-events:none;opacity:0;"></canvas>
+    <div id="noMap">
+      <div class="no-map-inner">
+        <span>🗺</span>
+        <p>Nenhuma cena ativa</p>
+        <small>Crie uma cena no painel lateral para começar</small>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── HUD LATERAL ───────────────────────────────── -->
+<aside class="hud" id="hud">
+
+  <div class="hud-title">
+    <span class="hud-rune">⚔</span>
+    <div>
+      <strong><%= campaign.name %></strong>
+      <span class="hud-label">Sessão Ativa</span>
+    </div>
+  </div>
+
+  <div class="hud-divider"></div>
+
+  <!-- CENAS -->
+  <div class="hud-section">
+    <div class="hud-section-header">
+      <p class="hud-section-label">Cenas</p>
+      <button class="hud-icon-btn" id="btnNewScene" title="Nova cena">＋</button>
+    </div>
+
+    <!-- Form nova cena (colapsável) -->
+    <div class="scene-form collapsed" id="sceneForm">
+      <input class="tf-input" id="sfName"  type="text"  placeholder="Nome da cena" maxlength="40" autocomplete="off">
+      <textarea class="tf-input tf-textarea" id="sfUrl" placeholder="Cole a URL da imagem (https://…)" rows="2"></textarea>
+      <div class="scene-form-or">
+        <span>ou</span>
+      </div>
+      <label class="hud-btn hud-btn--file">
+        <input type="file" id="sfFile" accept="image/*" hidden>
+        <span class="hud-icon">📁</span><span>Arquivo local</span>
+      </label>
+      <button class="hud-btn hud-btn--accent" id="sfSubmit">
+        <span class="hud-icon">✦</span><span>Criar Cena</span>
+      </button>
+    </div>
+
+    <!-- Lista de cenas -->
+    <div class="scene-list" id="sceneList">
+      <p class="empty-hint" id="sceneEmptyHint">Nenhuma cena criada.</p>
+    </div>
+  </div>
+
+  <div class="hud-divider"></div>
+
+  <!-- MAPA -->
+  <div class="hud-section">
+    <p class="hud-section-label">Visão</p>
+    <button class="hud-btn" id="btnReset">
+      <span class="hud-icon">⊙</span><span>Resetar Visão</span>
+    </button>
+    <button class="hud-btn" id="btnGrid">
+      <span class="hud-icon" id="gridIcon">⊞</span>
+      <span id="gridLabel">Mostrar Grade</span>
+    </button>
+  </div>
+
+  <div class="hud-divider"></div>
+
+  <!-- TOKENS -->
+  <div class="hud-section">
+    <p class="hud-section-label">Tokens</p>
+    <button class="hud-btn" id="btnAddToken">
+      <span class="hud-icon">＋</span><span>Adicionar Token</span>
+    </button>
+    <div class="token-form collapsed" id="tokenForm">
+      <input class="tf-input" id="tfName" type="text" placeholder="Nome do token" maxlength="24" autocomplete="off">
+      <div class="tf-row">
+        <div class="tf-color-group">
+          <span class="tf-label">Cor</span>
+          <div class="tf-swatches" id="tfSwatches"></div>
+        </div>
+        <div class="tf-size-group">
+          <span class="tf-label">Tam.</span>
+          <div class="tf-size-btns">
+            <button class="tf-size active" data-size="1">1×1</button>
+            <button class="tf-size"        data-size="2">2×2</button>
+          </div>
+        </div>
+      </div>
+      <button class="hud-btn hud-btn--accent" id="tfSubmit">
+        <span class="hud-icon">✦</span><span>Criar Token</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="hud-divider"></div>
+
+  <!-- DADOS -->
+  <div class="hud-section">
+    <p class="hud-section-label">Dados</p>
+    <div class="dice-panel" id="dicePanel">
+      <button class="die-btn" data-faces="4">d4</button>
+      <button class="die-btn" data-faces="6">d6</button>
+      <button class="die-btn" data-faces="8">d8</button>
+      <button class="die-btn" data-faces="10">d10</button>
+      <button class="die-btn" data-faces="12">d12</button>
+      <button class="die-btn die-btn--d20" data-faces="20">d20</button>
+    </div>
+    <button class="hud-btn" id="btnToggleLog">
+      <span class="hud-icon">📜</span><span>Histórico</span>
+    </button>
+  </div>
+
+  <div class="hud-divider"></div>
+
+  <!-- NOTAS -->
+  <div class="hud-section">
+    <p class="hud-section-label">Mestre</p>
+    <button class="hud-btn" id="btnNotes">
+      <span class="hud-icon">✏</span><span>Notas</span>
+    </button>
+    <!-- Névoa de Guerra -->
+    <button class="hud-btn" id="btnFog">
+      <span class="hud-icon">👁</span><span>Névoa de Guerra</span>
+    </button>
+    <div class="fog-tool-panel hidden" id="fogToolPanel">
+      <div class="fog-tools">
+        <button class="fog-tool active" data-tool="hide"   id="fogToolHide">⬛ Esconder</button>
+        <button class="fog-tool"        data-tool="reveal" id="fogToolReveal">⬜ Revelar</button>
+      </div>
+      <button class="hud-btn hud-btn--danger" id="btnFogClear" style="font-size:.7rem;padding:.35rem .6rem;">
+        <span class="hud-icon">✕</span><span>Limpar Névoa</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="hud-divider"></div>
+
+  <div class="hud-zoom-info">
+    <span class="hud-label">Zoom</span>
+    <span id="zoomDisplay">100%</span>
+  </div>
+
+  <a href="/" class="hud-btn hud-btn--danger">
+    <span class="hud-icon">←</span><span>Dashboard</span>
+  </a>
+
+</aside>
+
+<!-- ── LOG DRAWER ─────────────────────────────────── -->
+<div class="side-drawer" id="logDrawer">
+  <div class="drawer-header">
+    <span class="drawer-title">📜 Histórico de Dados</span>
+    <button class="drawer-close" id="btnCloseLog">✕</button>
+  </div>
+  <ul class="log-list" id="logList"></ul>
+</div>
+
+<!-- ── NOTES DRAWER ───────────────────────────────── -->
+<div class="side-drawer notes-drawer" id="notesDrawer">
+  <div class="drawer-header">
+    <span class="drawer-title">✏ Notas</span>
+    <button class="hud-btn hud-btn--accent hud-btn--sm" id="btnNewNote">＋ Nova</button>
+    <button class="drawer-close" id="btnCloseNotes">✕</button>
+  </div>
+
+  <!-- Lista de notas -->
+  <div class="notes-list" id="notesList">
+    <p class="empty-hint" id="notesEmptyHint">Nenhuma nota ainda.</p>
+  </div>
+
+  <!-- Editor de nota (hidden por padrão) -->
+  <div class="note-editor hidden" id="noteEditor">
+    <div class="note-editor-header">
+      <button class="drawer-close" id="btnBackNotes" title="Voltar">←</button>
+      <input class="note-title-input" id="noteTitleInput" type="text" placeholder="Título da nota" maxlength="60">
+      <div class="note-editor-actions">
+        <span class="notes-saved" id="notesSaved"></span>
+        <button class="ctx-item ctx-item--danger" id="btnDeleteNote" title="Excluir nota">✕</button>
+      </div>
+    </div>
+    <textarea class="notes-area" id="notesArea" placeholder="Conteúdo da nota…"></textarea>
+  </div>
+</div>
+
+<!-- ── CONTEXT MENU ────────────────────────────────── -->
+<div class="ctx-menu hidden" id="ctxMenu">
+  <button class="ctx-item ctx-item--danger" id="ctxDelete">✕ Excluir Token</button>
+</div>
+
+<!-- ── CONTROLS HINT ──────────────────────────────── -->
+<div class="controls-hint">
+  <span>🖱 Roda — Zoom</span>
+  <span>⊞ Btn Dir. — Pan</span>
+  <span>✦ Arrastar — Mover Token</span>
+</div>
+
+<script>window.CAMPAIGN_ID = '<%= campaign.id %>';</script>
+<script src="/js/tabletop.js" type="module"></script>
+<%- include('partials/footer', {}) %>
