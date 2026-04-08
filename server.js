@@ -18,6 +18,7 @@ function migrate() {
     ['campaigns', 'map_url TEXT'],
     ['campaigns', 'notes TEXT'],
     ['tokens',    'scene_id INTEGER'],
+    ['scenes',    'fog_data TEXT'],
   ];
   cols.forEach(([tbl, col]) => {
     try { db.run(`ALTER TABLE ${tbl} ADD COLUMN ${col}`); } catch(_) {}
@@ -207,28 +208,32 @@ app.delete('/notes/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-/* ─── FOG OF WAR ─────────────────────────────────────────── */
+/* ─── FOG OF WAR (BRUSH SYSTEM) ─────────────────────────── */
 
+// Busca a imagem da névoa salva na cena
 app.get('/scenes/:id/fog', (req, res) => {
-  const shapes = db.all(
-    'SELECT * FROM fog_shapes WHERE scene_id = ? ORDER BY id ASC',
-    [req.params.id]
-  );
-  res.json(shapes);
+  const scene = db.get('SELECT fog_data FROM scenes WHERE id = ?', [req.params.id]);
+  if (!scene) return res.status(404).json({ error: 'Cena não encontrada' });
+  
+  // Retorna o campo fog_data como image_data para o front-end
+  res.json({ image_data: scene.fog_data });
 });
 
+// Salva o desenho da névoa (Base64) no banco
 app.post('/scenes/:id/fog', (req, res) => {
-  const { x, y, w, h, mode } = req.body;
-  const result = db.run(
-    'INSERT INTO fog_shapes (scene_id, x, y, w, h, mode) VALUES (?, ?, ?, ?, ?, ?)',
-    [req.params.id, x, y, w, h, mode || 'hide']
+  const { image_data } = req.body;
+  
+  db.run(
+    'UPDATE scenes SET fog_data = ? WHERE id = ?',
+    [image_data || null, req.params.id]
   );
-  res.json({ id: result.lastInsertRowid, ok: true });
+  
+  res.json({ ok: true });
 });
 
-// Limpa todos os shapes da cena
+// Opcional: Rota de delete se quiser limpar tudo via API
 app.delete('/scenes/:id/fog', (req, res) => {
-  db.run('DELETE FROM fog_shapes WHERE scene_id = ?', [req.params.id]);
+  db.run('UPDATE scenes SET fog_data = NULL WHERE id = ?', [req.params.id]);
   res.json({ ok: true });
 });
 
@@ -254,15 +259,6 @@ app.post('/campaigns/:id/logs', (req, res) => {
 
 db.init().then(() => {
   migrate();
-  db.run(`CREATE TABLE IF NOT EXISTS fog_shapes (
-    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    scene_id INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
-    x        REAL NOT NULL,
-    y        REAL NOT NULL,
-    w        REAL NOT NULL,
-    h        REAL NOT NULL,
-    mode     TEXT NOT NULL DEFAULT 'hide'
-  )`);
 
   app.listen(PORT, () => {
     console.log(`\n  ⚔  VTT running → http://localhost:${PORT}\n`);
