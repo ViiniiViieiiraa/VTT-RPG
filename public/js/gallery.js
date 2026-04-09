@@ -127,9 +127,10 @@ function buildTemplateCard(tpl) {
       <span class="tpl-sub">${tpl.subcategory} · ${CAT_LABEL[tpl.category]}</span>
     </div>
     <div class="tpl-actions">
-      <button class="tpl-btn-place" data-id="${tpl.id}" title="Colocar no mapa">⊕</button>
-      <button class="tpl-btn-edit"  data-id="${tpl.id}" title="Editar">✎</button>
-      <button class="tpl-btn-del"   data-id="${tpl.id}" title="Excluir">✕</button>
+      <button class="tpl-btn-place"  data-id="${tpl.id}" title="Colocar no mapa">⊕</button>
+      <button class="tpl-btn-sheet"  data-id="${tpl.id}" title="Editar Ficha">📋</button>
+      <button class="tpl-btn-edit"   data-id="${tpl.id}" title="Editar template">✎</button>
+      <button class="tpl-btn-del"    data-id="${tpl.id}" title="Excluir">✕</button>
     </div>`;
 
   // Place on map
@@ -138,7 +139,10 @@ function buildTemplateCard(tpl) {
   // Double-click on avatar also places
   card.querySelector('.tpl-avatar').addEventListener('dblclick', () => placeTemplateOnMap(tpl));
 
-  // Edit
+  // Edit sheet (opens sheet panel in "template mode")
+  card.querySelector('.tpl-btn-sheet').addEventListener('click', () => openTemplateSheet(tpl));
+
+  // Edit template metadata
   card.querySelector('.tpl-btn-edit').addEventListener('click', () => openTemplateModal(tpl));
 
   // Delete
@@ -160,23 +164,18 @@ async function placeTemplateOnMap(tpl) {
   }
 
   const sizeNum = SIZE_TO_GRID[tpl.subcategory] || 1;
-  let maxHp = null;
-  if (tpl.sheet_data) {
-    try { maxHp = JSON.parse(tpl.sheet_data).hp_max || null; } catch(_){}
-  }
-
   const res   = await fetch('/tokens', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       campaign_id: window.CAMPAIGN_ID,
       scene_id:    sceneId,
       template_id: tpl.id,
-      name:        tpl.name,
+      name:        tpl.name,       // server auto-suffixes "Goblin 1", "Goblin 2"…
       color:       tpl.color,
+      image_url:   tpl.image_url || null,
       size:        sizeNum,
-      pos_x:       0, pos_y: 0,  // tabletop will center
-      max_hp:      maxHp,
-      current_hp:  maxHp,
+      pos_x: 0, pos_y: 0,
+      // HP lives exclusively in sheet_data — server deep-clones it
     }),
   });
   const token = await res.json();
@@ -193,10 +192,6 @@ function openTemplateModal(tpl = null) {
   tplCategory.value  = tpl?.category    || 'npc';
   tplSize.value      = tpl?.subcategory || '1x1';
   tplImageUrl.value  = tpl?.image_url   || '';
-  tplMaxHp.value     = '';
-  if (tpl?.sheet_data) {
-    try { tplMaxHp.value = JSON.parse(tpl.sheet_data).hp_max || ''; } catch(_){}
-  }
   selectedTplColor = tpl?.color || '#9b5de5';
   document.querySelectorAll('.tpl-swatch').forEach(s => {
     s.classList.toggle('active', s.dataset.color === selectedTplColor);
@@ -244,15 +239,11 @@ btnTplModalSave.addEventListener('click', async () => {
   const name = tplName.value.trim();
   if (!name) { tplName.focus(); return; }
 
-  const hp = parseInt(tplMaxHp.value) || 0;
-  const sheet_data = hp > 0 ? { hp_max: hp } : null;
-
   const payload = {
     name, category: tplCategory.value,
     subcategory: tplSize.value,
     color: selectedTplColor,
     image_url: tplImageUrl.value.trim() || null,
-    sheet_data,
   };
 
   if (editingTplId) {
@@ -273,6 +264,12 @@ btnTplModalSave.addEventListener('click', async () => {
   closeTemplateModal();
   renderGallery();
 });
+
+// ── Open sheet for a template (not an instance) ───────────
+async function openTemplateSheet(tpl) {
+  // Mode B: pass templateCtx so sheet.js uses correct routes
+  await window.openTokenSheet?.(null, { templateId: tpl.id, name: tpl.name });
+}
 
 // ── Init ──────────────────────────────────────────────────
 loadTemplates();

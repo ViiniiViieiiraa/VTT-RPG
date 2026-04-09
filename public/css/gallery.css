@@ -7,17 +7,24 @@
   position: fixed; right: 0; top: 50%;
   transform: translateY(-50%);
   z-index: 150;
-  width: 32px; height: 56px;
-  background: rgba(13,13,16,.88);
-  border: 1px solid rgba(255,255,255,.1);
+  width: 36px; height: 64px;
+  padding-left: 4px;           /* ensure icon not clipped by scrollbar */
+  background: rgba(13,13,16,.92);
+  border: 1px solid rgba(255,255,255,.12);
   border-right: none;
-  border-radius: 10px 0 0 10px;
+  border-radius: 12px 0 0 12px;
   color: var(--text-2);
   font-size: 1.1rem;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: background .18s, color .18s;
-  backdrop-filter: blur(12px);
+  transition: background .18s, color .18s, transform .18s;
+  backdrop-filter: blur(16px);
+  box-shadow: -3px 0 12px rgba(0,0,0,.4);
+}
+/* Nudge left when gallery is open so toggle stays reachable */
+.gallery-sidebar.open + * .gallery-toggle,
+.gallery-toggle.active {
+  transform: translateY(-50%) translateX(-290px);
 }
 .gallery-toggle:hover, .gallery-toggle.active {
   background: var(--accent-dim); color: var(--accent);
@@ -114,6 +121,7 @@
 }
 .tpl-btn-place:hover { color: var(--accent); border-color: rgba(201,168,76,.4); background: var(--accent-dim); }
 .tpl-btn-edit:hover  { color: var(--text-1); border-color: rgba(255,255,255,.2); background: rgba(255,255,255,.08); }
+.tpl-btn-sheet:hover { color: var(--accent); border-color: rgba(201,168,76,.4); background: var(--accent-dim); }
 .tpl-btn-del:hover   { color: #e05252; border-color: rgba(224,82,82,.3); background: rgba(224,82,82,.1); }
 
 /* ── TEMPLATE MODAL ───────────────────────────────── */
@@ -310,16 +318,34 @@ select.tf-input {
 
 /* ── TOKEN MAP OVERLAYS ───────────────────────────── */
 
-/* HP bar below token */
+/* HP bar below token — hidden until hover */
 .token-hp-bar {
-  position: absolute; bottom: -8px; left: 0; right: 0;
-  height: 5px; border-radius: 99px; overflow: hidden;
-  background: rgba(0,0,0,.5);
+  position: absolute; bottom: -11px; left: -2px; right: -2px;
+  height: 7px; border-radius: 99px; overflow: visible;
+  background: rgba(0,0,0,.55);
+  opacity: 0;
+  transition: opacity .2s ease;
+  pointer-events: none;
 }
+.token:hover .token-hp-bar { opacity: 1; }
+
 .token-hp-fill {
   height: 100%; border-radius: 99px;
-  transition: width .3s ease, background .3s ease;
+  transition: width .35s ease, background .35s ease;
 }
+/* HP text tooltip above bar */
+.token-hp-text {
+  position: absolute; bottom: 9px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10,10,14,.92);
+  border: 1px solid rgba(255,255,255,.12);
+  color: #e0ddd5;
+  font-size: 9px; font-family: 'Cinzel', serif; font-weight: 700;
+  padding: 1px 5px; border-radius: 99px;
+  white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .2s ease;
+}
+.token:hover .token-hp-text { opacity: 1; }
 
 /* Condition badges (ring around token) */
 .token-conditions {
@@ -340,3 +366,14 @@ select.tf-input {
 
 /* ── RESPONSIVE: hide gallery toggle when panel open ── */
 .sheet-panel.open ~ .gallery-toggle { pointer-events: none; opacity: .3; }
+
+/* ── Auto-calc read-only fields ──────────────────────────── */
+.sheet-readonly {
+  background: rgba(255,255,255,.02) !important;
+  border-color: rgba(255,255,255,.05) !important;
+  color: var(--accent) !important;
+  cursor: default;
+  font-family: 'Cinzel', serif;
+  font-weight: 600;
+  text-align: center;
+}

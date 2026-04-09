@@ -1,7 +1,16 @@
 /**
- * sheet.js — D&D 5e Character Sheet Panel  (Etapa 7)
- * Abre ao clicar direito → "Abrir Ficha" em um token.
- * Salva dados de volta via PATCH /tokens/:id/sheet (debounced).
+ * sheet.js — D&D 5e Sheet Panel  (Etapa 9 — Single Source of Truth)
+ *
+ * MODE A — Token instance:  openSheet(tokenId)
+ *   GET  /tokens/:id/sheet   →  { token, sheet }
+ *   PATCH /tokens/:id/sheet  →  { sheet_data: {...} }
+ *
+ * MODE B — Template:  openSheet(null, { templateId, name, ... })
+ *   GET  /templates/:id/sheet →  { template, sheet }
+ *   PATCH /templates/:id/sheet →  { sheet_data: {...} }
+ *
+ * HP, conditions, ALL stats live exclusively in sheet_data JSON.
+ * No separate hp / conditions columns are read or written.
  */
 
 const $ = id => document.getElementById(id);
@@ -11,68 +20,15 @@ const sheetPanelTitle = $('sheetPanelTitle');
 const sheetBody       = $('sheetBody');
 const btnSheetClose   = $('btnSheetClose');
 const sheetSaved      = $('sheetSaved');
-const ctxOpenSheet    = $('ctxOpenSheet');
 
-let currentTokenId = null;
-let sheetData      = {};
-let sheetDebounce  = null;
-const SAVE_DELAY   = 1500;
+// ── Mode state ────────────────────────────────────────────
+let mode         = null;   // 'token' | 'template'
+let activeId     = null;   // token id or template id
+let sheetData    = {};
+let saveTimer    = null;
+const SAVE_MS    = 1400;
 
-// ── Context menu hook ──────────────────────────────────────
-// tabletop.js expõe: window.getCtxTargetId()
-ctxOpenSheet?.addEventListener('click', async () => {
-  const tokenId = window.getCtxTargetId?.();
-  if (!tokenId) return;
-  window.closeCtxMenuGlobal?.();
-  await openSheet(tokenId);
-});
-
-btnSheetClose?.addEventListener('click', closeSheet);
-
-// ── Open / Close ───────────────────────────────────────────
-async function openSheet(tokenId) {
-  currentTokenId = tokenId;
-  sheetSaved.textContent = '';
-
-  try {
-    const res  = await fetch(`/tokens/${tokenId}/sheet`);
-    const data = await res.json();
-
-    sheetPanelTitle.textContent = data.token?.name || 'Ficha';
-    sheetData = {
-      // Defaults for a new token
-      class: '', race: '', background: '', level: 1, alignment: '',
-      proficiency: 2, ac: 10, speed: 30, initiative: 0,
-      hp_max: data.token?.max_hp || 0,
-      hp_current: data.token?.current_hp ?? data.token?.max_hp ?? 0,
-      hit_dice: '1d8',
-      stats: { str:10, dex:10, con:10, int:10, wis:10, cha:10 },
-      saving_throws: [],
-      skills_prof: [],
-      attacks: [],
-      features: '',
-      equipment: '',
-      notes: '',
-      // Override with saved data
-      ...data.sheet,
-    };
-
-    renderSheet();
-    sheetPanel.classList.remove('hidden');
-    sheetPanel.classList.add('open');
-  } catch (err) {
-    console.error('Erro ao abrir ficha:', err);
-  }
-}
-
-function closeSheet() {
-  sheetPanel.classList.remove('open');
-  sheetPanel.classList.add('hidden');
-  currentTokenId = null;
-  clearTimeout(sheetDebounce);
-}
-
-// ── Render ─────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────
 const STATS  = ['str','dex','con','int','wis','cha'];
 const STAT_L = { str:'FOR', dex:'DES', con:'CON', int:'INT', wis:'SAB', cha:'CAR' };
 
@@ -84,342 +40,398 @@ const SKILLS_MAP = [
   ['Stealth','dex'],['Survival','wis'],
 ];
 
-const CONDITIONS_LIST = [
-  { id:'blinded',      label:'Cego',         icon:'👁️' },
-  { id:'charmed',      label:'Enfeitiçado',   icon:'💞' },
-  { id:'deafened',     label:'Surdo',         icon:'🔇' },
-  { id:'exhaustion',   label:'Exausto',       icon:'😴' },
-  { id:'frightened',   label:'Amedrontado',   icon:'😱' },
-  { id:'grappled',     label:'Agarrado',      icon:'🤼' },
-  { id:'incapacitated',label:'Incapacitado',  icon:'❌' },
-  { id:'invisible',    label:'Invisível',     icon:'👻' },
-  { id:'paralyzed',    label:'Paralisado',    icon:'⚡' },
-  { id:'petrified',    label:'Petrificado',   icon:'🪨' },
-  { id:'poisoned',     label:'Envenenado',    icon:'🤢' },
-  { id:'prone',        label:'Prostrado',     icon:'⬇️' },
-  { id:'restrained',   label:'Contido',       icon:'🕸️' },
-  { id:'stunned',      label:'Atordoado',     icon:'💫' },
-  { id:'unconscious',  label:'Inconsciente',  icon:'💀' },
+const CONDITIONS = [
+  {id:'blinded',icon:'👁️',label:'Cego'},{id:'charmed',icon:'💞',label:'Enfeitiçado'},
+  {id:'deafened',icon:'🔇',label:'Surdo'},{id:'exhaustion',icon:'😴',label:'Exausto'},
+  {id:'frightened',icon:'😱',label:'Amedrontado'},{id:'grappled',icon:'🤼',label:'Agarrado'},
+  {id:'incapacitated',icon:'❌',label:'Incapacitado'},{id:'invisible',icon:'👻',label:'Invisível'},
+  {id:'paralyzed',icon:'⚡',label:'Paralisado'},{id:'petrified',icon:'🪨',label:'Petrificado'},
+  {id:'poisoned',icon:'🤢',label:'Envenenado'},{id:'prone',icon:'⬇️',label:'Prostrado'},
+  {id:'restrained',icon:'🕸️',label:'Contido'},{id:'stunned',icon:'💫',label:'Atordoado'},
+  {id:'unconscious',icon:'💀',label:'Inconsciente'},
 ];
+const COND_ICONS = Object.fromEntries(CONDITIONS.map(c => [c.id, c.icon]));
 
-function mod(score) {
-  const m = Math.floor((score - 10) / 2);
-  return (m >= 0 ? '+' : '') + m;
+// ── Formulas ──────────────────────────────────────────────
+const modNum  = s => Math.floor((s - 10) / 2);
+const modStr  = s => { const m = modNum(s); return (m >= 0 ? '+' : '') + m; };
+const profLvl = l => Math.ceil((l||1) / 4) + 1;
+const bonusStr = (score, prof, isProficient) => {
+  const b = modNum(score) + (isProficient ? prof : 0);
+  return (b >= 0 ? '+' : '') + b;
+};
+
+// ── Open ──────────────────────────────────────────────────
+async function openSheet(tokenId, templateCtx = null) {
+  sheetSaved.textContent = '';
+
+  if (templateCtx) {
+    // ── Mode B: Template ──
+    mode     = 'template';
+    activeId = templateCtx.templateId;
+    try {
+      const res  = await fetch(`/templates/${activeId}/sheet`);
+      const data = await res.json();
+      sheetPanelTitle.textContent = `[Template] ${data.template?.name || ''}`;
+      _initSheet(data.sheet || {});
+    } catch(e) { console.error('openSheet template:', e); return; }
+
+  } else {
+    // ── Mode A: Token instance ──
+    mode     = 'token';
+    activeId = tokenId;
+    try {
+      const res  = await fetch(`/tokens/${tokenId}/sheet`);
+      const data = await res.json();
+      sheetPanelTitle.textContent = data.token?.name || 'Ficha';
+      _initSheet(data.sheet || {});
+    } catch(e) { console.error('openSheet token:', e); return; }
+  }
+
+  renderSheet();
+  sheetPanel.classList.remove('hidden');
+  sheetPanel.classList.add('open');
 }
 
+function _initSheet(raw) {
+  // Merge defaults with saved data — HP lives here exclusively
+  sheetData = {
+    token_name: '', class: '', race: '', background: '', level: 1, alignment: '',
+    ac: 10, speed: 30, initiative: 0,
+    hp_max: 0, hp_current: 0, hit_dice: '1d8',
+    stats: { str:10, dex:10, con:10, int:10, wis:10, cha:10 },
+    saving_throws: [], skills_prof: [],
+    attacks: [], features: '', equipment: '', notes: '',
+    conditions: [],
+    ...raw,
+  };
+  // Auto-sync proficiency from level (never stored separately)
+}
+
+function closeSheet() {
+  clearTimeout(saveTimer);
+  sheetPanel.classList.remove('open');
+  setTimeout(() => sheetPanel.classList.add('hidden'), 320);
+  mode = null; activeId = null;
+}
+
+$('btnSheetClose')?.addEventListener('click', closeSheet);
+
+// ── Context menu hook ─────────────────────────────────────
+$('ctxOpenSheet')?.addEventListener('click', () => {
+  const id = window.getCtxTargetId?.();
+  if (!id) return;
+  window.closeCtxMenuGlobal?.();
+  openSheet(id);
+});
+
+// ── Render ────────────────────────────────────────────────
 function renderSheet() {
-  const s  = sheetData;
-  const hp = s.hp_current ?? s.hp_max ?? 0;
-  const hpMax = s.hp_max || 1;
-  const hpPct = Math.max(0, Math.min(100, (hp / hpMax) * 100));
-  const hpColor = hpPct > 60 ? '#2a9d8f' : hpPct > 25 ? '#f4a261' : '#e63946';
+  const s    = sheetData;
+  const prof = profLvl(s.level);
+  const hp   = s.hp_current ?? 0;
+  const hpMax = s.hp_max || 0;
+  const hpPct = hpMax > 0 ? Math.max(0, Math.min(100, (hp / hpMax) * 100)) : 0;
+  const hpColor = hpPct > 50 ? '#2a9d8f' : hpPct > 25 ? '#f4a261' : '#e63946';
+  const esc = v => (v||'').toString().replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
   sheetBody.innerHTML = `
-    <!-- ── IDENTITY ─────────────────────────────────────── -->
+
+    <!-- ── IDENTITY ──────────────────────────────────── -->
     <div class="sheet-section">
       <div class="sheet-row-3">
+        <label class="sheet-field"><span>Nome</span>
+          <input data-key="token_name" type="text" value="${esc(s.token_name)}" placeholder="Personagem"></label>
         <label class="sheet-field"><span>Classe</span>
-          <input type="text" data-key="class" value="${esc(s.class)}" placeholder="Guerreiro">
-        </label>
-        <label class="sheet-field"><span>Raça</span>
-          <input type="text" data-key="race" value="${esc(s.race)}" placeholder="Humano">
-        </label>
+          <input data-key="class" type="text" value="${esc(s.class)}" placeholder="Guerreiro"></label>
         <label class="sheet-field"><span>Nível</span>
-          <input type="number" data-key="level" value="${s.level||1}" min="1" max="20" style="width:60px">
-        </label>
+          <input data-key="level" type="number" value="${s.level||1}" min="1" max="20"></label>
       </div>
       <div class="sheet-row-3">
+        <label class="sheet-field"><span>Raça</span>
+          <input data-key="race" type="text" value="${esc(s.race)}" placeholder="Humano"></label>
         <label class="sheet-field"><span>Antecedente</span>
-          <input type="text" data-key="background" value="${esc(s.background)}" placeholder="Soldado">
-        </label>
-        <label class="sheet-field"><span>Alinhamento</span>
-          <input type="text" data-key="alignment" value="${esc(s.alignment)}" placeholder="Leal e Bom">
-        </label>
-        <label class="sheet-field"><span>Bônus Proficiência</span>
-          <input type="number" data-key="proficiency" value="${s.proficiency||2}" min="1" max="9" style="width:60px">
-        </label>
+          <input data-key="background" type="text" value="${esc(s.background)}"></label>
+        <label class="sheet-field"><span>Bônus Prof.</span>
+          <input type="text" value="+${prof}" readonly class="sheet-readonly" id="profDisplay"></label>
       </div>
     </div>
 
-    <!-- ── HP BAR ────────────────────────────────────────── -->
+    <!-- ── HP ────────────────────────────────────────── -->
     <div class="sheet-section">
       <div class="sheet-hp-row">
-        <label class="sheet-field" style="flex:1">
-          <span>HP Atual</span>
-          <input type="number" data-key="hp_current" value="${hp}" min="0" class="hp-input">
-        </label>
+        <label class="sheet-field" style="flex:1"><span>HP Atual</span>
+          <input data-key="hp_current" type="number" value="${hp}" min="0" class="hp-input"></label>
         <span class="hp-slash">/</span>
-        <label class="sheet-field" style="flex:1">
-          <span>HP Máximo</span>
-          <input type="number" data-key="hp_max" value="${hpMax}" min="0" class="hp-input">
-        </label>
-        <label class="sheet-field" style="width:80px">
-          <span>Dado de Vida</span>
-          <input type="text" data-key="hit_dice" value="${esc(s.hit_dice)}" placeholder="1d8">
-        </label>
+        <label class="sheet-field" style="flex:1"><span>HP Máximo</span>
+          <input data-key="hp_max" type="number" value="${hpMax}" min="0" class="hp-input"></label>
+        <label class="sheet-field" style="width:80px"><span>Dado de Vida</span>
+          <input data-key="hit_dice" type="text" value="${esc(s.hit_dice)}" placeholder="1d8"></label>
       </div>
       <div class="hp-bar-track">
-        <div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div>
-        <span class="hp-bar-text">${hp} / ${hpMax}</span>
+        <div class="hp-bar-fill" id="sheetHpFill" style="width:${hpPct}%;background:${hpColor}"></div>
+        <span class="hp-bar-text" id="sheetHpText">${hp} / ${hpMax}</span>
       </div>
     </div>
 
-    <!-- ── COMBAT ────────────────────────────────────────── -->
+    <!-- ── COMBAT ─────────────────────────────────────── -->
     <div class="sheet-section">
       <div class="sheet-row-3">
-        <div class="sheet-combat-stat">
-          <span class="combat-label">CA</span>
-          <input type="number" data-key="ac" value="${s.ac||10}" class="combat-input">
-        </div>
-        <div class="sheet-combat-stat">
-          <span class="combat-label">Iniciativa</span>
-          <input type="number" data-key="initiative" value="${s.initiative??0}" class="combat-input">
-        </div>
-        <div class="sheet-combat-stat">
-          <span class="combat-label">Deslocamento</span>
-          <input type="number" data-key="speed" value="${s.speed||30}" class="combat-input">
-        </div>
+        <div class="sheet-combat-stat"><span class="combat-label">CA</span>
+          <input data-key="ac" type="number" value="${s.ac||10}" class="combat-input"></div>
+        <div class="sheet-combat-stat"><span class="combat-label">Iniciativa</span>
+          <input data-key="initiative" type="number" value="${s.initiative??0}" class="combat-input"></div>
+        <div class="sheet-combat-stat"><span class="combat-label">Deslocamento</span>
+          <input data-key="speed" type="number" value="${s.speed||30}" class="combat-input"></div>
       </div>
     </div>
 
-    <!-- ── ABILITY SCORES ────────────────────────────────── -->
+    <!-- ── ABILITY SCORES ─────────────────────────────── -->
     <div class="sheet-section">
       <p class="sheet-section-label">Atributos</p>
       <div class="stats-grid">
-        ${STATS.map(stat => `
+        ${STATS.map(st => `
           <div class="stat-block">
-            <span class="stat-label">${STAT_L[stat]}</span>
-            <span class="stat-mod">${mod(s.stats?.[stat]??10)}</span>
-            <input type="number" data-stat="${stat}" value="${s.stats?.[stat]??10}" min="1" max="30" class="stat-input">
+            <span class="stat-label">${STAT_L[st]}</span>
+            <span class="stat-mod" id="smod-${st}">${modStr(s.stats?.[st]??10)}</span>
+            <input type="number" data-stat="${st}" value="${s.stats?.[st]??10}" min="1" max="30" class="stat-input">
           </div>`).join('')}
       </div>
     </div>
 
-    <!-- ── SAVING THROWS ─────────────────────────────────── -->
+    <!-- ── SAVING THROWS ──────────────────────────────── -->
     <div class="sheet-section">
-      <p class="sheet-section-label">Testes de Resistência</p>
+      <p class="sheet-section-label">Testes de Resistência <span style="font-size:.52rem;color:var(--text-3);font-family:Raleway">(auto)</span></p>
       <div class="saves-grid">
-        ${STATS.map(stat => {
-          const isProficient = (s.saving_throws||[]).includes(stat);
-          const bonus = Math.floor(((s.stats?.[stat]??10) - 10) / 2) + (isProficient ? (s.proficiency||2) : 0);
-          const sign  = bonus >= 0 ? '+' : '';
+        ${STATS.map(st => {
+          const prof2 = (s.saving_throws||[]).includes(st);
           return `<label class="save-item">
-            <input type="checkbox" data-save="${stat}" ${isProficient?'checked':''}>
-            <span class="save-bonus">${sign}${bonus}</span>
-            <span>${STAT_L[stat]}</span>
-          </label>`;
+            <input type="checkbox" data-save="${st}" ${prof2?'checked':''}>
+            <span class="save-bonus" id="sb-${st}">${bonusStr(s.stats?.[st]??10,prof,prof2)}</span>
+            <span>${STAT_L[st]}</span></label>`;
         }).join('')}
       </div>
     </div>
 
-    <!-- ── SKILLS ─────────────────────────────────────────── -->
-    <div class="sheet-section sheet-section--collapsible" id="skillsSection">
-      <p class="sheet-section-label sheet-toggle" data-target="skillsList">Perícias ▾</p>
+    <!-- ── SKILLS ─────────────────────────────────────── -->
+    <div class="sheet-section">
+      <p class="sheet-section-label sheet-toggle" data-target="skillsList" style="cursor:pointer">
+        Perícias ▾ <span style="font-size:.52rem;color:var(--text-3);font-family:Raleway">(auto)</span></p>
       <div class="skills-grid" id="skillsList">
         ${SKILLS_MAP.map(([skill, base]) => {
-          const isProficient = (s.skills_prof||[]).includes(skill);
-          const bonus = Math.floor(((s.stats?.[base]??10) - 10) / 2) + (isProficient ? (s.proficiency||2) : 0);
-          const sign  = bonus >= 0 ? '+' : '';
+          const prof2 = (s.skills_prof||[]).includes(skill);
+          const sid   = 'sk-' + skill.replace(/ /g,'_');
           return `<label class="save-item">
-            <input type="checkbox" data-skill="${skill}" ${isProficient?'checked':''}>
-            <span class="save-bonus">${sign}${bonus}</span>
-            <span>${skill}</span>
-          </label>`;
+            <input type="checkbox" data-skill="${skill}" data-base="${base}" ${prof2?'checked':''}>
+            <span class="save-bonus" id="${sid}">${bonusStr(s.stats?.[base]??10,prof,prof2)}</span>
+            <span>${skill}</span></label>`;
         }).join('')}
       </div>
     </div>
 
-    <!-- ── ATTACKS ────────────────────────────────────────── -->
+    <!-- ── ATTACKS ─────────────────────────────────────── -->
     <div class="sheet-section">
       <p class="sheet-section-label">Ataques</p>
-      <div id="attacksList">
-        ${(s.attacks||[]).map((atk, i) => attackRow(atk, i)).join('')}
-      </div>
+      <div id="atkList">${(s.attacks||[]).map((a,i) => atkRow(a,i)).join('')}</div>
       <button class="sheet-btn-sm" id="btnAddAtk">＋ Ataque</button>
     </div>
 
-    <!-- ── CONDITIONS ─────────────────────────────────────── -->
+    <!-- ── CONDITIONS ─────────────────────────────────── -->
     <div class="sheet-section">
       <p class="sheet-section-label">Condições</p>
       <div class="conditions-grid">
-        ${CONDITIONS_LIST.map(c => {
-          const active = (s.conditions||[]).includes(c.id);
-          return `<label class="condition-item ${active?'active':''}" title="${c.label}">
-            <input type="checkbox" data-condition="${c.id}" ${active?'checked':''}> 
+        ${CONDITIONS.map(c => {
+          const on = (s.conditions||[]).includes(c.id);
+          return `<label class="condition-item ${on?'active':''}" title="${c.label}">
+            <input type="checkbox" data-condition="${c.id}" ${on?'checked':''}>
             <span>${c.icon}</span>
-            <span class="condition-label">${c.label}</span>
-          </label>`;
+            <span class="condition-label">${c.label}</span></label>`;
         }).join('')}
       </div>
     </div>
 
-    <!-- ── TRAITS / NOTES ─────────────────────────────────── -->
+    <!-- ── NOTES ──────────────────────────────────────── -->
     <div class="sheet-section">
-      <p class="sheet-section-label">Traços e Habilidades</p>
-      <textarea data-key="features" class="sheet-textarea" rows="3" placeholder="Ação de Surto, Segundo Fôlego…">${esc(s.features)}</textarea>
-      <p class="sheet-section-label" style="margin-top:.5rem">Equipamentos</p>
-      <textarea data-key="equipment" class="sheet-textarea" rows="2" placeholder="Espada Longa, Escudo…">${esc(s.equipment)}</textarea>
-      <p class="sheet-section-label" style="margin-top:.5rem">Notas</p>
-      <textarea data-key="notes" class="sheet-textarea" rows="3" placeholder="Observações da sessão…">${esc(s.notes)}</textarea>
+      <p class="sheet-section-label">Traços / Habilidades</p>
+      <textarea data-key="features" class="sheet-textarea" rows="3" placeholder="Ação de Surto…">${esc(s.features)}</textarea>
+      <p class="sheet-section-label" style="margin-top:.4rem">Equipamentos</p>
+      <textarea data-key="equipment" class="sheet-textarea" rows="2">${esc(s.equipment)}</textarea>
+      <p class="sheet-section-label" style="margin-top:.4rem">Notas</p>
+      <textarea data-key="notes" class="sheet-textarea" rows="3">${esc(s.notes)}</textarea>
     </div>`;
 
-  bindSheetEvents();
+  _bindEvents();
 }
 
-function attackRow(atk, i) {
+function atkRow(a, i) {
+  const e = v => (v||'').toString().replace(/</g,'&lt;');
   return `<div class="atk-row" data-atk="${i}">
-    <input type="text"   data-atk-key="name"   value="${esc(atk.name)}"   placeholder="Espada" class="tf-input atk-name">
-    <input type="text"   data-atk-key="bonus"  value="${esc(atk.bonus)}"  placeholder="+5"    class="tf-input atk-bonus">
-    <input type="text"   data-atk-key="damage" value="${esc(atk.damage)}" placeholder="1d8+3" class="tf-input atk-dmg">
-    <button class="tpl-btn-del atk-del" data-atk="${i}">✕</button>
-  </div>`;
+    <input type="text" data-atk-key="name"   value="${e(a.name)}"   placeholder="Espada" class="tf-input atk-name">
+    <input type="text" data-atk-key="bonus"  value="${e(a.bonus)}"  placeholder="+5"     class="tf-input atk-bonus">
+    <input type="text" data-atk-key="damage" value="${e(a.damage)}" placeholder="1d8+3"  class="tf-input atk-dmg">
+    <button class="tpl-btn-del atk-del" data-atk="${i}">✕</button></div>`;
 }
 
-function esc(v) { return (v||'').toString().replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// ── Bind events ───────────────────────────────────────────
+function _bindEvents() {
 
-// ── Bind events ────────────────────────────────────────────
-function bindSheetEvents() {
-  // Generic text/number inputs
+  // Generic key→value inputs
   sheetBody.querySelectorAll('[data-key]').forEach(el => {
     el.addEventListener('input', () => {
-      const key = el.dataset.key;
-      const val = el.type === 'number' ? Number(el.value) : el.value;
-      sheetData[key] = val;
-      // Live HP bar update
-      if (key === 'hp_current' || key === 'hp_max') updateHpBar();
-      scheduleSave();
+      const k = el.dataset.key;
+      sheetData[k] = el.type === 'number' ? Number(el.value) : el.value;
+      if (k === 'hp_current' || k === 'hp_max') _syncHp();
+      if (k === 'level') _syncLevel();
+      _scheduleSave();
     });
   });
 
-  // Stats
+  // Stat inputs → recalc everything
   sheetBody.querySelectorAll('[data-stat]').forEach(el => {
     el.addEventListener('input', () => {
       if (!sheetData.stats) sheetData.stats = {};
       sheetData.stats[el.dataset.stat] = Number(el.value);
-      scheduleSave();
+      _recalc();
+      _scheduleSave();
     });
   });
 
-  // Saving throws
+  // Saving throw checkboxes
   sheetBody.querySelectorAll('[data-save]').forEach(el => {
     el.addEventListener('change', () => {
-      const saves = sheetBody.querySelectorAll('[data-save]:checked');
-      sheetData.saving_throws = [...saves].map(s => s.dataset.save);
-      scheduleSave();
+      sheetData.saving_throws = [...sheetBody.querySelectorAll('[data-save]:checked')]
+        .map(e => e.dataset.save);
+      _recalc();
+      _scheduleSave();
     });
   });
 
-  // Skills
+  // Skill checkboxes
   sheetBody.querySelectorAll('[data-skill]').forEach(el => {
     el.addEventListener('change', () => {
-      const checked = sheetBody.querySelectorAll('[data-skill]:checked');
-      sheetData.skills_prof = [...checked].map(s => s.dataset.skill);
-      scheduleSave();
+      sheetData.skills_prof = [...sheetBody.querySelectorAll('[data-skill]:checked')]
+        .map(e => e.dataset.skill);
+      _recalc();
+      _scheduleSave();
     });
   });
 
   // Conditions
   sheetBody.querySelectorAll('[data-condition]').forEach(el => {
     el.addEventListener('change', () => {
-      const checked = sheetBody.querySelectorAll('[data-condition]:checked');
-      sheetData.conditions = [...checked].map(c => c.dataset.condition);
+      sheetData.conditions = [...sheetBody.querySelectorAll('[data-condition]:checked')]
+        .map(e => e.dataset.condition);
       el.closest('.condition-item').classList.toggle('active', el.checked);
-      scheduleSave();
-      // Update token overlay immediately
-      window.updateTokenConditions?.(currentTokenId, sheetData.conditions);
+      // Live update token overlay
+      if (mode === 'token') window.updateTokenConditions?.(activeId, sheetData.conditions);
+      _scheduleSave();
     });
   });
 
   // Attacks
   sheetBody.querySelector('#btnAddAtk')?.addEventListener('click', () => {
     if (!sheetData.attacks) sheetData.attacks = [];
-    sheetData.attacks.push({ name: '', bonus: '', damage: '' });
-    sheetBody.querySelector('#attacksList').insertAdjacentHTML(
-      'beforeend', attackRow({ name:'', bonus:'', damage:'' }, sheetData.attacks.length - 1)
-    );
-    bindAtkEvents();
-    scheduleSave();
+    sheetData.attacks.push({ name:'', bonus:'', damage:'' });
+    const list = sheetBody.querySelector('#atkList');
+    list.insertAdjacentHTML('beforeend', atkRow({ name:'',bonus:'',damage:'' }, sheetData.attacks.length - 1));
+    _bindAtkRow(list.lastElementChild);
+    _scheduleSave();
   });
 
-  bindAtkEvents();
+  sheetBody.querySelectorAll('.atk-row').forEach(_bindAtkRow);
 
-  // Collapsible sections
+  // Collapsible
   sheetBody.querySelectorAll('.sheet-toggle').forEach(el => {
     el.addEventListener('click', () => {
-      const target = document.getElementById(el.dataset.target);
-      target?.classList.toggle('collapsed');
-      el.textContent = el.textContent.includes('▾')
-        ? el.textContent.replace('▾','▸')
-        : el.textContent.replace('▸','▾');
+      const t = document.getElementById(el.dataset.target);
+      t?.classList.toggle('collapsed');
+      el.innerHTML = el.innerHTML.includes('▾')
+        ? el.innerHTML.replace('▾','▸') : el.innerHTML.replace('▸','▾');
     });
   });
 }
 
-function bindAtkEvents() {
-  sheetBody.querySelectorAll('.atk-row').forEach(row => {
-    const idx = Number(row.dataset.atk);
-    row.querySelectorAll('[data-atk-key]').forEach(el => {
-      el.addEventListener('input', () => {
-        if (!sheetData.attacks) sheetData.attacks = [];
-        if (!sheetData.attacks[idx]) sheetData.attacks[idx] = {};
-        sheetData.attacks[idx][el.dataset.atkKey] = el.value;
-        scheduleSave();
-      });
+function _bindAtkRow(row) {
+  const i = Number(row.dataset.atk);
+  row.querySelectorAll('[data-atk-key]').forEach(el => {
+    el.addEventListener('input', () => {
+      if (!sheetData.attacks[i]) sheetData.attacks[i] = {};
+      sheetData.attacks[i][el.dataset.atkKey] = el.value;
+      _scheduleSave();
     });
-    row.querySelector('.atk-del')?.addEventListener('click', () => {
-      sheetData.attacks.splice(idx, 1);
-      renderSheet();
-      scheduleSave();
-    });
+  });
+  row.querySelector('.atk-del')?.addEventListener('click', () => {
+    sheetData.attacks.splice(i, 1);
+    renderSheet();
+    _scheduleSave();
   });
 }
 
-// ── HP bar live update ─────────────────────────────────────
-function updateHpBar() {
-  const track = sheetBody.querySelector('.hp-bar-track');
-  const fill  = sheetBody.querySelector('.hp-bar-fill');
-  const text  = sheetBody.querySelector('.hp-bar-text');
-  if (!fill) return;
+// ── Auto-calculation helpers ──────────────────────────────
+function _syncLevel() {
+  const prof = profLvl(sheetData.level);
+  const el   = document.getElementById('profDisplay');
+  if (el) el.value = `+${prof}`;
+  _recalc();
+}
 
+function _recalc() {
+  const s    = sheetData;
+  const prof = profLvl(s.level);
+
+  STATS.forEach(st => {
+    const score = s.stats?.[st] ?? 10;
+    const modEl = document.getElementById(`smod-${st}`);
+    if (modEl) modEl.textContent = modStr(score);
+
+    const saveEl = document.getElementById(`sb-${st}`);
+    if (saveEl) saveEl.textContent = bonusStr(score, prof, (s.saving_throws||[]).includes(st));
+  });
+
+  SKILLS_MAP.forEach(([skill, base]) => {
+    const el = document.getElementById('sk-' + skill.replace(/ /g,'_'));
+    if (el) el.textContent = bonusStr(s.stats?.[base]??10, prof, (s.skills_prof||[]).includes(skill));
+  });
+}
+
+function _syncHp() {
   const hp    = sheetData.hp_current ?? 0;
-  const max   = sheetData.hp_max || 1;
-  const pct   = Math.max(0, Math.min(100, (hp / max) * 100));
-  const color = pct > 60 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
+  const max   = sheetData.hp_max || 0;
+  const pct   = max > 0 ? Math.max(0, Math.min(100, (hp / max) * 100)) : 0;
+  const color = pct > 50 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
 
-  fill.style.width      = pct + '%';
-  fill.style.background = color;
-  text.textContent      = `${hp} / ${max}`;
+  const fill = document.getElementById('sheetHpFill');
+  const text = document.getElementById('sheetHpText');
+  if (fill) { fill.style.width = pct + '%'; fill.style.background = color; }
+  if (text) text.textContent = `${hp} / ${max}`;
 
-  // Also update the token on the map
-  window.updateTokenHp?.(currentTokenId, hp, max);
+  // Live update map token overlay
+  if (mode === 'token') window.updateTokenHp?.(activeId, hp, max);
 }
 
-// ── Save ───────────────────────────────────────────────────
-function scheduleSave() {
+// ── Save ──────────────────────────────────────────────────
+function _scheduleSave() {
   sheetSaved.textContent = '…';
   sheetSaved.classList.remove('ok');
-  clearTimeout(sheetDebounce);
-  sheetDebounce = setTimeout(saveSheet, SAVE_DELAY);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(_save, SAVE_MS);
 }
 
-async function saveSheet() {
-  if (!currentTokenId) return;
+async function _save() {
+  if (!activeId || !mode) return;
+  const url = mode === 'token'
+    ? `/tokens/${activeId}/sheet`
+    : `/templates/${activeId}/sheet`;
   try {
-    await fetch(`/tokens/${currentTokenId}/sheet`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        current_hp:  sheetData.hp_current,
-        max_hp:      sheetData.hp_max,
-        conditions:  sheetData.conditions || [],
-        sheet_data:  sheetData,
-      }),
+    await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheet_data: sheetData }),
     });
     sheetSaved.textContent = '✓ Salvo';
     sheetSaved.classList.add('ok');
-  } catch (_) {
-    sheetSaved.textContent = 'Erro';
-  }
+  } catch (_) { sheetSaved.textContent = 'Erro'; }
 }
 
-// ── Expose to tabletop.js ──────────────────────────────────
+// ── Expose ────────────────────────────────────────────────
 window.openTokenSheet = openSheet;

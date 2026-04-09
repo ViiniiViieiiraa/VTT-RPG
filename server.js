@@ -22,6 +22,8 @@ function migrate() {
     ['tokens',    'current_hp INTEGER'],
     ['tokens',    'max_hp INTEGER'],
     ['tokens',    'conditions TEXT'],
+    ['tokens',    'sheet_data TEXT'],
+    ['tokens',    'image_url TEXT'],
     ['scenes',    'fog_data TEXT'],
   ];
   cols.forEach(([tbl, col]) => {
@@ -33,7 +35,7 @@ function migrate() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     name TEXT NOT NULL DEFAULT 'Cena sem nome',
-    image_url TEXT,
+    image_url TEXT, fog_data TEXT,
     is_active INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   )`);
@@ -155,14 +157,63 @@ app.get('/campaigns/:id/tokens', (req, res) => {
 });
 
 app.post('/tokens', (req, res) => {
-  const { campaign_id, scene_id, name, pos_x, pos_y, size, color } = req.body;
+  const { campaign_id, scene_id, template_id, name, pos_x, pos_y, size,
+          color, image_url, max_hp, current_hp } = req.body;
   if (!campaign_id || !name?.trim())
     return res.status(400).json({ error: 'campaign_id e name obrigatórios' });
+
+  // ── Auto-counter: "Goblin" → "Goblin 1", "Goblin 2" … ──
+  let finalName = name.trim();
+  if (template_id && scene_id) {
+    const existing = db.all(
+      "SELECT name FROM tokens WHERE scene_id=? AND name LIKE ?",
+      [scene_id, finalName + '%']
+    );
+    // Count names that match "Base" or "Base N"
+    const nums = existing
+      .map(r => { const m = r.name.match(/^.+?\s(\d+)$/); return m ? parseInt(m[1]) : (r.name === finalName ? 0 : -1); })
+      .filter(n => n >= 0);
+    const next = nums.length === 0 ? 1 : Math.max(...nums) + 1;
+    finalName = `${finalName} ${next}`;
+  }
+
+  // ── Deep-clone sheet_data from template (instance independence) ──
+  let clonedSheet   = null;
+  let resolvedHp    = max_hp ?? null;
+  let resolvedImage = image_url || null;
+  if (template_id) {
+    const tpl = db.get('SELECT * FROM token_templates WHERE id=?', [template_id]);
+    if (tpl) {
+      resolvedImage = resolvedImage ?? tpl.image_url ?? null;  // inherit image
+      if (tpl.sheet_data) {
+        try {
+          const parsed = JSON.parse(tpl.sheet_data);
+          clonedSheet  = JSON.stringify(parsed);           // deep copy via JSON round-trip
+          resolvedHp   = resolvedHp ?? parsed.hp_max ?? null;
+        } catch(_) {}
+      }
+    }
+  }
+
+  // Inject finalName into clonedSheet so the instance sheet knows its own name
+  if (clonedSheet) {
+    try {
+      const parsed = JSON.parse(clonedSheet);
+      parsed.token_name = finalName;
+      clonedSheet = JSON.stringify(parsed);
+    } catch(_) {}
+  }
+
   const result = db.run(
-    'INSERT INTO tokens (campaign_id, scene_id, name, pos_x, pos_y, size, color) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [campaign_id, scene_id || null, name.trim(), pos_x ?? 0, pos_y ?? 0, size ?? 1, color ?? '#e63946']
+    `INSERT INTO tokens
+       (campaign_id, scene_id, template_id, name, pos_x, pos_y, size, color,
+        image_url, sheet_data)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [campaign_id, scene_id||null, template_id||null,
+     finalName, pos_x??0, pos_y??0, size??1, color??'#e63946',
+     resolvedImage, clonedSheet || null]
   );
-  const token = db.get('SELECT * FROM tokens WHERE id = ?', [result.lastInsertRowid]);
+  const token = db.get('SELECT * FROM tokens WHERE id=?', [result.lastInsertRowid]);
   res.json(token);
 });
 
@@ -299,36 +350,52 @@ app.delete('/templates/:id', (req, res) => {
 app.get('/tokens/:id/sheet', (req, res) => {
   const token = db.get('SELECT * FROM tokens WHERE id=?', [req.params.id]);
   if (!token) return res.status(404).json({ error: 'not found' });
+
+  // Single source of truth: everything lives in sheet_data JSON.
+  // If instance has no sheet_data yet, fall back to template for first open.
   let sheet = {};
-  if (token.template_id) {
+  if (token.sheet_data) {
+    try { sheet = JSON.parse(token.sheet_data); } catch(_) {}
+  } else if (token.template_id) {
     const tpl = db.get('SELECT sheet_data FROM token_templates WHERE id=?', [token.template_id]);
-    if (tpl?.sheet_data) try { sheet = JSON.parse(tpl.sheet_data); } catch(_){}
+    if (tpl?.sheet_data) {
+      try {
+        sheet = JSON.parse(tpl.sheet_data);
+        // Deep-clone now (lazy clone on first open)
+        sheet.token_name = token.name;
+      } catch(_) {}
+    }
   }
-  res.json({
-    token,
-    sheet,
-    current_hp:  token.current_hp,
-    max_hp:      token.max_hp,
-    conditions:  token.conditions ? JSON.parse(token.conditions) : [],
-  });
+  // Always include token metadata for the panel title / name field
+  res.json({ token, sheet });
 });
 
 app.patch('/tokens/:id/sheet', (req, res) => {
-  const { current_hp, max_hp, conditions, sheet_data } = req.body;
-  const token = db.get('SELECT * FROM tokens WHERE id=?', [req.params.id]);
+  const { sheet_data } = req.body;
+  const token = db.get('SELECT id FROM tokens WHERE id=?', [req.params.id]);
   if (!token) return res.status(404).json({ error: 'not found' });
+  // Single source of truth: only sheet_data JSON is stored/updated
+  db.run('UPDATE tokens SET sheet_data=? WHERE id=?',
+    [sheet_data !== undefined ? JSON.stringify(sheet_data) : null, req.params.id]);
+  res.json({ ok: true });
+});
 
-  // Update instance HP/conditions
-  db.run('UPDATE tokens SET current_hp=?,max_hp=?,conditions=? WHERE id=?',
-    [current_hp??token.current_hp, max_hp??token.max_hp,
-     conditions !== undefined ? JSON.stringify(conditions) : token.conditions,
-     req.params.id]);
+// ── Template sheet routes (gallery "Edit Sheet") ──
+app.get('/templates/:id/sheet', (req, res) => {
+  const tpl = db.get('SELECT * FROM token_templates WHERE id=?', [req.params.id]);
+  if (!tpl) return res.status(404).json({ error: 'not found' });
+  let sheet = {};
+  if (tpl.sheet_data) { try { sheet = JSON.parse(tpl.sheet_data); } catch(_) {} }
+  res.json({ template: tpl, sheet });
+});
 
-  // Persist sheet_data back to template if linked
-  if (sheet_data && token.template_id) {
-    db.run('UPDATE token_templates SET sheet_data=? WHERE id=?',
-      [JSON.stringify(sheet_data), token.template_id]);
-  }
+// Separate route to save sheet_data to the TEMPLATE (from gallery "Edit Sheet" button)
+app.patch('/templates/:id/sheet', (req, res) => {
+  const { sheet_data } = req.body;
+  const tpl = db.get('SELECT id FROM token_templates WHERE id=?', [req.params.id]);
+  if (!tpl) return res.status(404).json({ error: 'not found' });
+  db.run('UPDATE token_templates SET sheet_data=? WHERE id=?',
+    [JSON.stringify(sheet_data), req.params.id]);
   res.json({ ok: true });
 });
 

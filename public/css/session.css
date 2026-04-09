@@ -339,6 +339,9 @@ html, body { overflow: hidden; height: 100%; width: 100%; user-select: none; }
   color: var(--accent);
 }
 
+/* token image (from template) */
+.token-img { width:100%;height:100%;object-fit:cover;border-radius:50%;pointer-events:none; }
+
 /* Estilo da névoa cinza (nuvem) no canvas */
 #fogCanvas {
   pointer-events: none; /* Só ativa eventos quando a ferramenta está aberta */

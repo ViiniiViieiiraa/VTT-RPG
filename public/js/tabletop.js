@@ -407,16 +407,30 @@ function createTokenEl(token) {
   el.style.setProperty('--sz', px + 'px');
 
   // Build token image or initial
-  const imgHtml = token.image_url
-    ? `<img src="${token.image_url}" alt="" class="token-img">`
+  // Resolve image from token instance first, fall back to nothing (gallery sets image_url on token row)
+  const tokenImgUrl = token.image_url || null;
+  const imgHtml = tokenImgUrl
+    ? `<img src="${tokenImgUrl}" alt="${token.name}" class="token-img" loading="lazy">`
     : `<span class="token-initial">${token.name.charAt(0).toUpperCase()}</span>`;
 
-  // HP bar (only if max_hp defined)
-  const hpHtml = (token.max_hp > 0) ? (() => {
-    const pct   = Math.max(0, Math.min(100, ((token.current_hp ?? token.max_hp) / token.max_hp) * 100));
-    const color = pct > 60 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
-    return `<div class="token-hp-bar"><div class="token-hp-fill" style="width:${pct}%;background:${color}"></div></div>`;
-  })() : '';
+  // HP bar — read from sheet_data JSON (single source of truth)
+  const hpHtml = (() => {
+    let cur = 0, max = 0;
+    if (token.sheet_data) {
+      try {
+        const sd = JSON.parse(token.sheet_data);
+        cur = sd.hp_current ?? sd.hp_max ?? 0;
+        max = sd.hp_max ?? 0;
+      } catch(_) {}
+    }
+    if (max <= 0) return '';
+    const pct   = Math.max(0, Math.min(100, (cur / max) * 100));
+    const color = pct > 50 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
+    return `<div class="token-hp-bar">
+      <div class="token-hp-fill" style="width:${pct}%;background:${color}"></div>
+    </div>
+    <span class="token-hp-text">${cur}/${max}</span>`;
+  })();
 
   // Condition badges
   const COND_ICONS = {
@@ -425,8 +439,14 @@ function createTokenEl(token) {
     paralyzed:'⚡', petrified:'🪨', poisoned:'🤢', prone:'⬇️',
     restrained:'🕸️', stunned:'💫', unconscious:'💀',
   };
+  // Conditions — read from sheet_data JSON (single source of truth)
   let conditions = [];
-  try { conditions = token.conditions ? JSON.parse(token.conditions) : []; } catch(_){}
+  try {
+    if (token.sheet_data) {
+      const sd = JSON.parse(token.sheet_data);
+      conditions = sd.conditions || [];
+    }
+  } catch(_) {}
   const condHtml = conditions.length > 0
     ? `<div class="token-conditions">${conditions.slice(0,5).map(c =>
         `<span class="token-condition-badge" title="${c}">${COND_ICONS[c]||'?'}</span>`).join('')}</div>`
@@ -545,6 +565,13 @@ ctxDelete.addEventListener('click', async () => {
   ctxTargetEl?.remove();
   await fetch(`/tokens/${ctxTargetId}`, { method: 'DELETE' });
   closeCtxMenu();
+});
+
+// "Abrir Ficha" — delegated to sheet.js via window.openTokenSheet
+document.getElementById('ctxOpenSheet')?.addEventListener('click', () => {
+  const id = ctxTargetId;
+  closeCtxMenu();
+  window.openTokenSheet?.(id);
 });
 
 document.addEventListener('click', e => { if (!e.target.closest('#ctxMenu')) closeCtxMenu(); });
@@ -957,13 +984,31 @@ window.placeTokenFromGallery = (token) => {
 
 /** Called by sheet.js when HP changes */
 window.updateTokenHp = (tokenId, current, max) => {
-  const el  = tokenLayer.querySelector(`[data-id="${tokenId}"]`);
-  const bar = el?.querySelector('.token-hp-fill');
-  const pct = max > 0 ? Math.max(0, Math.min(100, (current / max) * 100)) : 0;
-  if (bar) {
-    bar.style.width      = pct + '%';
-    bar.style.background = pct > 60 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
+  if (!tokenId) return;
+  const el   = tokenLayer.querySelector(`[data-id="${tokenId}"]`);
+  if (!el) return;
+  // Show bar if hidden (token had no HP when placed)
+  let bar  = el.querySelector('.token-hp-bar');
+  let fill = el.querySelector('.token-hp-fill');
+  let text = el.querySelector('.token-hp-text');
+  if (!bar && max > 0) {
+    // Inject bar dynamically if not present
+    bar  = document.createElement('div');
+    bar.className = 'token-hp-bar';
+    fill = document.createElement('div');
+    fill.className = 'token-hp-fill';
+    text = document.createElement('span');
+    text.className = 'token-hp-text';
+    bar.appendChild(fill);
+    el.appendChild(bar);
+    el.appendChild(text);
   }
+  if (!fill) return;
+  const pct   = max > 0 ? Math.max(0, Math.min(100, (current / max) * 100)) : 0;
+  const color = pct > 50 ? '#2a9d8f' : pct > 25 ? '#f4a261' : '#e63946';
+  fill.style.width      = pct + '%';
+  fill.style.background = color;
+  if (text) text.textContent = `${current}/${max}`;
 };
 
 /** Called by sheet.js when conditions change */
