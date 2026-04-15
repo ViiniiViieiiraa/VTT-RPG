@@ -236,6 +236,15 @@ function renderSheet() {
       <button class="sheet-btn-sm" id="btnAddAtk">＋ Ataque</button>
     </div>
 
+    <!-- ── AURAS ─────────────────────────────────────── -->
+    <div class="sheet-section">
+      <p class="sheet-section-label">Auras</p>
+      <div id="auraList">
+        ${(s.auras || []).map((a, i) => auraRow(a, i)).join('')}
+      </div>
+      <button class="sheet-btn-sm" id="btnAddAura">＋ Aura</button>
+    </div>
+
     <!-- ── CONDITIONS ─────────────────────────────────── -->
     <div class="sheet-section">
       <p class="sheet-section-label">Condições</p>
@@ -270,6 +279,16 @@ function atkRow(a, i) {
     <input type="text" data-atk-key="bonus"  value="${e(a.bonus)}"  placeholder="+5"     class="tf-input atk-bonus">
     <input type="text" data-atk-key="damage" value="${e(a.damage)}" placeholder="1d8+3"  class="tf-input atk-dmg">
     <button class="tpl-btn-del atk-del" data-atk="${i}">✕</button></div>`;
+}
+
+function auraRow(aura, i) {
+  const e = v => (v||'').toString().replace(/</g,'&lt;');
+  return `<div class="aura-row" data-aura="${i}">
+    <input type="text"   data-aura-key="name"      value="${e(aura.name)}"             placeholder="Aura" class="tf-input aura-name">
+    <input type="number" data-aura-key="radius_ft" value="${aura.radius_ft||5}" min="5" step="5" class="tf-input aura-radius">
+    <span class="aura-unit">ft</span>
+    <input type="color"  data-aura-key="color"     value="${aura.color||'#9b5de5'}"    class="aura-color-pick">
+    <button class="tpl-btn-del aura-del" data-aura="${i}">✕</button></div>`;
 }
 
 // ── Bind events ───────────────────────────────────────────
@@ -340,6 +359,18 @@ function _bindEvents() {
 
   sheetBody.querySelectorAll('.atk-row').forEach(_bindAtkRow);
 
+  // Auras
+  sheetBody.querySelector('#btnAddAura')?.addEventListener('click', () => {
+    if (!sheetData.auras) sheetData.auras = [];
+    sheetData.auras.push({ name:'', radius_ft:5, color:'#9b5de5' });
+    const list = sheetBody.querySelector('#auraList');
+    list.insertAdjacentHTML('beforeend', auraRow({ name:'', radius_ft:5, color:'#9b5de5' }, sheetData.auras.length-1));
+    _bindAuraRows();
+    _scheduleSave();
+    window.refreshTokenAuras?.(activeId);
+  });
+  _bindAuraRows();
+
   // Collapsible
   sheetBody.querySelectorAll('.sheet-toggle').forEach(el => {
     el.addEventListener('click', () => {
@@ -348,6 +379,53 @@ function _bindEvents() {
       el.innerHTML = el.innerHTML.includes('▾')
         ? el.innerHTML.replace('▾','▸') : el.innerHTML.replace('▸','▾');
     });
+  });
+}
+
+function _bindAuraRows() {
+  const rows = sheetBody.querySelectorAll('.aura-row');
+  rows.forEach((row, index) => {
+    // Input de Nome
+    const nameInput = row.querySelector('.aura-name');
+    if (nameInput) {
+      nameInput.addEventListener('input', (e) => {
+        sheetData.auras[index].name = e.target.value;
+        _scheduleSave();
+      });
+    }
+
+    // Input de Raio
+    const radiusInput = row.querySelector('.aura-radius');
+    if (radiusInput) {
+      radiusInput.addEventListener('input', (e) => {
+        sheetData.auras[index].radius_ft = Number(e.target.value);
+        _scheduleSave();
+        if (mode === 'token') window.refreshTokenAuras?.(activeId);
+      });
+    }
+
+    // --- ADICIONE ESTE BLOCO PARA A COR ---
+    const colorInput = row.querySelector('.aura-color-pick');
+    if (colorInput) {
+      colorInput.addEventListener('input', (e) => {
+        sheetData.auras[index].color = e.target.value;
+        _scheduleSave();
+        // Atualiza a cor no mapa em tempo real
+        if (mode === 'token') window.refreshTokenAuras?.(activeId);
+      });
+    }
+    // --------------------------------------
+
+    // Botão de Excluir
+    const delBtn = row.querySelector('.aura-del');
+    if (delBtn) {
+      delBtn.addEventListener('click', () => {
+        sheetData.auras.splice(index, 1);
+        _scheduleSave();
+        renderSheet(); 
+        if (mode === 'token') window.refreshTokenAuras?.(activeId);
+      });
+    }
   });
 }
 
@@ -430,6 +508,8 @@ async function _save() {
     });
     sheetSaved.textContent = '✓ Salvo';
     sheetSaved.classList.add('ok');
+    // Refresh map aura rings after save (auras may have changed)
+    if (mode === 'token') window.refreshTokenAuras?.(activeId);
   } catch (_) { sheetSaved.textContent = 'Erro'; }
 }
 

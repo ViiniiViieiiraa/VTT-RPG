@@ -377,3 +377,122 @@ select.tf-input {
   font-weight: 600;
   text-align: center;
 }
+
+/* ── Aura rings (in tokenLayer, siblings of token els) ── */
+.aura-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid;
+  pointer-events: none;
+  box-sizing: border-box;
+  /* Subtle pulse animation so the GM always notices auras */
+  animation: auraPulse 3s ease-in-out infinite;
+  transition: visibility 0.2s;
+}
+
+@keyframes auraPulse {
+  0%,100% { opacity: .80; }
+  50%      { opacity: .45; }
+}
+
+/* ── Cursor states for measure mode ── */
+#viewport.measure-mode          { cursor: crosshair !important; }
+#viewport.measure-mode .token   { cursor: crosshair !important; }
+#viewport.measure-phase-1       { cursor: cell !important; }
+#viewport.measure-phase-1 .token { cursor: cell !important; }
+
+/* ── Measure tool buttons grid ── */
+.measure-btns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: .3rem;
+}
+
+.measure-tool-btn {
+  padding: .38rem 0;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+  color: var(--text-2);
+  font-family: 'Raleway', sans-serif;
+  font-size: .66rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  transition: all .15s;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.measure-tool-btn:hover {
+  background: rgba(255,255,255,.1);
+  color: var(--text-1);
+  border-color: rgba(255,255,255,.2);
+}
+.measure-tool-btn.active {
+  background: rgba(220,50,50,.15);
+  border-color: rgba(220,80,50,.5);
+  color: #f07060;
+  box-shadow: 0 0 8px rgba(220,50,50,.2);
+}
+
+/* ── Measure range row ── */
+.measure-range-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .3rem .35rem;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 8px;
+  margin-bottom: .3rem;
+}
+.measure-range-row.hidden { display: none; }
+
+.measure-input {
+  width: 58px;
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 6px;
+  color: var(--accent);
+  font-family: 'Cinzel', serif;
+  font-size: .8rem;
+  font-weight: 700;
+  text-align: center;
+  padding: .25rem .3rem;
+  outline: none;
+  flex: 1;
+}
+.measure-input:focus { border-color: var(--accent); }
+
+.hud-label-sm {
+  font-size: .58rem;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  white-space: nowrap;
+}
+
+/* ── Sheet: aura rows ── */
+.aura-row {
+  display: grid;
+  grid-template-columns: 1fr 54px auto auto auto;
+  gap: .35rem;
+  align-items: center;
+  margin-bottom: .35rem;
+}
+
+.aura-name   { min-width: 0; }
+.aura-radius { text-align: center; }
+.aura-unit   { font-size: .68rem; color: var(--text-3); }
+
+.aura-color-pick {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.15);
+  background: none;
+  cursor: pointer;
+  padding: 1px;
+  overflow: hidden;
+}

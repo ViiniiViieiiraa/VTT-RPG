@@ -8,6 +8,8 @@
     <div id="tokenLayer"></div>
     <!-- Fog of War: canvas dentro do mapLayer (segue pan/zoom) -->
     <canvas id="fogCanvas" style="position:absolute;top:0;left:0;pointer-events:none;opacity:0;"></canvas>
+    <!-- AoE Measurement overlay (above fog, below HUD) -->
+    <canvas id="overlayCanvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:18;"></canvas>    
     <div id="noMap">
       <div class="no-map-inner">
         <span>🗺</span>
@@ -148,8 +150,31 @@
         </button>
       </div>
     </div>
+    <button class="hud-btn active" id="btnToggleAuras">
+      <span class="hud-icon">👁</span><span id="auraLabel">Auras</span>
+    </button>
   </div>
 
+  <div class="hud-divider"></div>
+
+  <!-- AoE MEASUREMENT -->
+  <div class="hud-section">
+    <p class="hud-section-label">Medição AoE</p>
+    <div class="measure-btns">
+      <button class="measure-tool-btn" id="btnMeasureLine"   title="Linha reta (5ft de largura)">━ Linha</button>
+      <button class="measure-tool-btn" id="btnMeasureCone"   title="Cone (53°)">◭ Cone</button>
+      <button class="measure-tool-btn" id="btnMeasureCircle" title="Círculo/Esfera">◎ Círculo</button>
+    </div>
+    <div class="measure-range-row hidden" id="measureRangePanel">
+      <span class="hud-label-sm">Alcance</span>
+      <input type="number" id="measureRange" value="30" min="5" step="5" class="measure-input">
+      <span class="hud-label-sm">ft</span>
+    </div>
+    <button class="hud-btn" id="btnMeasureClear">
+      <span class="hud-icon">🗑</span><span>Limpar</span>
+    </button>
+  </div>
+  
   <div class="hud-divider"></div>
 
   <div class="hud-zoom-info">

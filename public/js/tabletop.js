@@ -10,6 +10,7 @@ const ZOOM_MIN    = 0.1;
 const ZOOM_MAX    = 8.0;
 const ZOOM_SPEED  = 0.0012;
 const GRID_SIZE   = 64;          // px no espaço interno do mapa
+const PX_PER_FT = GRID_SIZE / 5;   // 12.8 px / foot (GRID_SIZE=64, 5ft/square)
 const TOKEN_PX    = 56;          // diâmetro base 1×1 em px do mapa
 const NOTE_DEBOUNCE_MS = 1500;
 
@@ -52,6 +53,11 @@ const btnReset     = $('btnReset');
 const btnGrid      = $('btnGrid');
 const gridIcon     = $('gridIcon');
 const gridLabel    = $('gridLabel');
+
+// mapImage.addEventListener('load', () => {
+//     console.log("📢 Imagem do mapa detectada, iniciando componentes...");
+//     if (typeof initOverlayCanvas === 'function') initOverlayCanvas();
+// });
 
 // Tokens
 const btnAddToken  = $('btnAddToken');
@@ -174,6 +180,10 @@ function resetView() {
   cam.scale = Math.min((vw * 0.95) / iw, (vh * 0.95) / ih, 1);
   cam.x = (vw - iw * cam.scale) / 2;
   cam.y = (vh - ih * cam.scale) / 2;
+  
+  // Garante que o canvas de medição se ajuste ao novo tamanho/zoom
+  if (typeof initOverlayCanvas === 'function') initOverlayCanvas();
+  
   applyTransform(true);
 }
 
@@ -236,11 +246,25 @@ function loadMapDataURL(dataURL) {
   mapImage.onload = () => {
     ui.mapLoaded = true;
     noMap.classList.add('hidden');
+    
+    // 1. Ajuste de tamanho físico
     gridOverlay.style.width  = mapImage.naturalWidth  + 'px';
     gridOverlay.style.height = mapImage.naturalHeight + 'px';
+    
+    // 2. Chame uma única função organizadora
+    initializeMapDependencies();
+
     resetView();
   };
   mapImage.src = dataURL;
+}
+
+function initializeMapDependencies() {
+  console.log("🚀 Sincronizando componentes com o novo mapa...");
+  
+  if (typeof initFogCanvas === 'function') initFogCanvas();
+  if (typeof initOverlayCanvas === 'function') initOverlayCanvas();
+
 }
 
 // ══════════════════════════════════════════════
@@ -376,7 +400,9 @@ sfSubmit.addEventListener('click', async () => {
 function updateTokenVisibility() {
   if (!fogCtx) return;
   const tokens = document.querySelectorAll('.token');
+  
   tokens.forEach(tokenEl => {
+    const tokenId = tokenEl.dataset.id; // Pegamos o ID para achar a aura depois
     const size = Number(tokenEl.dataset.size);
     const half = (TOKEN_PX * size) / 2;
     const cx = parseFloat(tokenEl.style.left) + half;
@@ -385,9 +411,24 @@ function updateTokenVisibility() {
     const pixel = fogCtx.getImageData(cx, cy, 1, 1).data;
     const isUnderFog = pixel[3] > 0;
 
-    // Lógica alterada: Só esconde se estiver sob a névoa E a visão da névoa estiver ativa
+    // Lógica: Só esconde se estiver sob a névoa E a visão do mestre estiver "sólida"
     const shouldHide = isUnderFog && masterFogVisible;
+    
+    // 1. Aplica ao Token
     tokenEl.classList.toggle('token-fog-hidden', shouldHide);
+
+    // 2. Aplica às Auras vinculadas a este token
+    const auras = tokenLayer.querySelectorAll(`.aura-ring[data-tid="${tokenId}"]`);
+    auras.forEach(auraEl => {
+      // Usamos a mesma lógica de visibilidade
+      // Se 'shouldHide' for true, adicionamos uma classe para esconder a aura também
+      if (shouldHide) {
+        auraEl.style.visibility = 'hidden';
+      } else {
+        // Só mostramos se a visibilidade global das auras estiver ativa
+        auraEl.style.visibility = auraVisible ? 'visible' : 'hidden';
+      }
+    });
   });
 }
 
@@ -480,6 +521,7 @@ function createTokenEl(token) {
     drag.size   = size;
     drag.offX   = mouseMap.x - cx;
     drag.offY   = mouseMap.y - cy;
+    drag.token  = token;       // for aura re-render on drop
 
     el.classList.add('dragging');
     viewport.classList.add('token-drag');
@@ -496,8 +538,12 @@ function createTokenEl(token) {
 
 function placeToken(token) {
   const existing = tokenLayer.querySelector(`[data-id="${token.id}"]`);
-  if (existing) existing.remove();
+  if (existing) {
+    tokenLayer.querySelectorAll(`.aura-ring[data-tid="${token.id}"]`).forEach(r => r.remove());
+    existing.remove();
+  }
   tokenLayer.appendChild(createTokenEl(token));
+  if (typeof renderTokenAuras === 'function') renderTokenAuras(token);
 }
 
 // ══════════════════════════════════════════════
@@ -534,13 +580,20 @@ window.addEventListener('mouseup', async e => {
 
   viewport.classList.remove('token-drag');
   const tokenId = drag.id;
-  drag.active = false; drag.el = null;
-  updateTokenVisibility();
+  const savedToken = drag.token;
+  drag.active = false; drag.el = null; drag.token = null;
+  updateTokenVisibility?.();
 
   await fetch(`/tokens/${tokenId}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pos_x: snapped.x, pos_y: snapped.y }),
   });
+  // Re-render auras at new snap position
+  if (savedToken && typeof renderTokenAuras === 'function') {
+    savedToken.pos_x = snapped.x;
+    savedToken.pos_y = snapped.y;
+    renderTokenAuras(savedToken);
+  }
 });
 
 // ══════════════════════════════════════════════
@@ -562,8 +615,16 @@ function closeCtxMenu() {
 
 ctxDelete.addEventListener('click', async () => {
   if (!ctxTargetId) return;
+
+  // 1. Remove as auras vinculadas a este token no mapa
+  tokenLayer.querySelectorAll(`.aura-ring[data-tid="${ctxTargetId}"]`).forEach(r => r.remove());
+
+  // 2. Remove o elemento visual do token
   ctxTargetEl?.remove();
+
+  // 3. Avisa o servidor para deletar do banco de dados
   await fetch(`/tokens/${ctxTargetId}`, { method: 'DELETE' });
+
   closeCtxMenu();
 });
 
@@ -1038,3 +1099,315 @@ window.updateTokenConditions = (tokenId, conditions) => {
 applyTransform();
 restoreScenes();
 restoreLogs();
+
+// ─────────────────────────────────────────────
+// AURAS
+// ─────────────────────────────────────────────
+
+let auraVisible = true;
+
+/** Render aura rings in tokenLayer as siblings (absolute, auto-follow token). */
+function renderTokenAuras(token) {
+  // Remove stale rings for this token
+  tokenLayer.querySelectorAll(`.aura-ring[data-tid="${token.id}"]`).forEach(r => r.remove());
+
+  let auras = [];
+  try { if (token.sheet_data) auras = JSON.parse(token.sheet_data).auras || []; } catch(_) {}
+  if (!auras.length) return;
+
+  const size   = token.size || 1;
+  const halfPx = (TOKEN_PX * size) / 2;
+  const tokEl  = tokenLayer.querySelector(`[data-id="${token.id}"]`);
+  if (!tokEl) return;
+
+  const cx = parseFloat(tokEl.style.left) + halfPx;
+  const cy = parseFloat(tokEl.style.top)  + halfPx;
+
+  // Insert largest aura first (bottom of visual stack)
+  [...auras].reverse().forEach(aura => {
+    if (!(aura.radius_ft > 0)) return;
+    const rPx  = aura.radius_ft * PX_PER_FT;
+    const ring = document.createElement('div');
+    ring.className     = 'aura-ring';
+    ring.dataset.tid   = token.id;
+    ring.dataset.rPx   = rPx;
+    ring.style.cssText = `width:${rPx*2}px;height:${rPx*2}px;` +
+      `left:${cx-rPx}px;top:${cy-rPx}px;` +
+      `border-color:${aura.color||'#9b5de5'};` +
+      `background:${aura.color||'#9b5de5'}22;`;
+    ring.title = `${aura.name||'Aura'} — ${aura.radius_ft}ft`;
+    if (!auraVisible) ring.style.display = 'none';
+    tokenLayer.insertBefore(ring, tokenLayer.firstChild);
+  });
+}
+
+/** Move aura rings when token is being dragged (live follow). */
+function updateAuraPositions(tokenId, cx, cy) {
+  tokenLayer.querySelectorAll(`.aura-ring[data-tid="${tokenId}"]`).forEach(ring => {
+    const rPx = Number(ring.dataset.rPx);
+    ring.style.left = (cx - rPx) + 'px';
+    ring.style.top  = (cy - rPx) + 'px';
+  });
+}
+
+/** Called by sheet.js after aura list is saved, re-fetches and re-renders. */
+window.refreshTokenAuras = async (tokenId) => {
+  if (!tokenId) return;
+  try {
+    const res  = await fetch(`/tokens/${tokenId}/sheet`);
+    const data = await res.json();
+    const tokEl = tokenLayer.querySelector(`[data-id="${tokenId}"]`);
+    if (!tokEl) return;
+    renderTokenAuras({
+      id: tokenId,
+      size: Number(tokEl.dataset.size) || 1,
+      sheet_data: JSON.stringify(data.sheet),
+    });
+  } catch(_) {}
+};
+
+// Supplementary drag-move listener: keep auras in sync with token
+window.addEventListener('mousemove', e => {
+  if (!drag.active) return;
+  const rect = viewport.getBoundingClientRect();
+  const mm   = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
+  updateAuraPositions(drag.id, mm.x - drag.offX, mm.y - drag.offY);
+});
+
+// Aura toggle button
+$('btnToggleAuras')?.addEventListener('click', () => {
+  auraVisible = !auraVisible;
+  $('btnToggleAuras').classList.toggle('active', auraVisible);
+  const lbl = $('auraLabel');
+  if (lbl) lbl.textContent = auraVisible ? 'Auras' : 'Auras (off)';
+  tokenLayer.querySelectorAll('.aura-ring').forEach(r => {
+    r.style.display = auraVisible ? '' : 'none';
+  });
+});
+
+// ─────────────────────────────────────────────
+// OVERLAY CANVAS (AoE Measurement)
+// ─────────────────────────────────────────────
+
+let overlayCtx = null;
+
+function initOverlayCanvas() {
+  const oc = document.getElementById('overlayCanvas');
+  if (!oc || !mapImage) return;
+
+  // Garante que o buffer interno seja igual ao tamanho real da imagem
+  oc.width = mapImage.naturalWidth;
+  oc.height = mapImage.naturalHeight;
+
+  // Garante que o CSS acompanhe (importante para alinhar com o grid)
+  oc.style.width = mapImage.naturalWidth + 'px';
+  oc.style.height = mapImage.naturalHeight + 'px';
+  
+  overlayCtx = oc.getContext('2d');
+  console.log("📏 Canvas de Medição pronto:", oc.width, "x", oc.height);
+  redrawOverlay();
+}
+
+// ─────────────────────────────────────────────
+// MEASURE STATE
+// ─────────────────────────────────────────────
+
+const ms = {
+  tool:     null,    // 'line' | 'cone' | 'circle'
+  rangeFt:  30,
+  phase:    0,       // 0=idle  1=origin placed, waiting for direction click
+  origin:   null,    // {x,y} map coords
+  mousePos: null,    // current mouse in map coords (for preview)
+  shapes:   [],      // committed shapes [{tool,origin,dir,rangeFt}]
+};
+
+// ─────────────────────────────────────────────
+// GEOMETRY HELPERS
+// ─────────────────────────────────────────────
+
+const _dir = (a, b) => {
+  const dx = b.x-a.x, dy = b.y-a.y, d = Math.sqrt(dx*dx+dy*dy)||1;
+  return { x:dx/d, y:dy/d };
+};
+
+const _inCircle = (px,py,ox,oy,r) => {
+  const dx=px-ox, dy=py-oy; return dx*dx+dy*dy <= r*r;
+};
+
+const _inCone = (px,py,ox,oy,dx,dy,r) => {
+  const vx=px-ox, vy=py-oy;
+  const fwd = vx*dx+vy*dy;
+  return fwd>=0 && fwd<=r && Math.abs(vx*(-dy)+vy*dx) <= fwd*0.5;
+};
+
+const _inLine = (px,py,ox,oy,dx,dy,r) => {
+  const vx=px-ox, vy=py-oy;
+  const fwd=vx*dx+vy*dy;
+  return fwd>=0 && fwd<=r && Math.abs(vx*(-dy)+vy*dx)<=GRID_SIZE/2;
+};
+
+/** Highlight grid cells whose centres are inside the shape. */
+function _highlightCells(ctx, testFn) {
+  if (!overlayCtx) return;
+  const W = overlayCtx.canvas.width, H = overlayCtx.canvas.height;
+  // Save/restore fill is handled by caller
+  for (let x=0; x<W; x+=GRID_SIZE)
+    for (let y=0; y<H; y+=GRID_SIZE)
+      if (testFn(x+GRID_SIZE/2, y+GRID_SIZE/2))
+        ctx.fillRect(x+2, y+2, GRID_SIZE-4, GRID_SIZE-4);
+}
+
+function _drawShape(ctx, shape, preview) {
+  if (!shape.origin) return;
+  const { tool, origin:{x:ox,y:oy}, dir, rangeFt } = shape;
+  const rPx = rangeFt * PX_PER_FT;
+
+  ctx.save();
+  if (preview) { ctx.setLineDash([5,4]); ctx.globalAlpha = 0.75; }
+  ctx.strokeStyle = preview ? 'rgba(230,100,50,.9)' : 'rgba(220,50,50,.95)';
+  ctx.lineWidth   = preview ? 1.5 : 2.5;
+
+  if (tool === 'circle') {
+    ctx.fillStyle = preview ? 'rgba(220,50,50,.10)' : 'rgba(220,50,50,.18)';
+    ctx.beginPath(); ctx.arc(ox, oy, rPx, 0, Math.PI*2);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = preview ? 'rgba(220,50,50,.18)' : 'rgba(220,50,50,.28)';
+    _highlightCells(ctx, (px,py)=>_inCircle(px,py,ox,oy,rPx));
+
+  } else if (dir) {
+    const perp = {x:-dir.y, y:dir.x};
+    const ex   = ox+dir.x*rPx, ey = oy+dir.y*rPx;
+
+    ctx.fillStyle = preview ? 'rgba(220,50,50,.10)' : 'rgba(220,50,50,.18)';
+    if (tool === 'cone') {
+      const hw = rPx*0.5;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(ex+perp.x*hw, ey+perp.y*hw);
+      ctx.lineTo(ex-perp.x*hw, ey-perp.y*hw);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = preview ? 'rgba(220,50,50,.18)' : 'rgba(220,50,50,.28)';
+      _highlightCells(ctx, (px,py)=>_inCone(px,py,ox,oy,dir.x,dir.y,rPx));
+    } else { // line
+      const hw = GRID_SIZE/2;
+      ctx.beginPath();
+      ctx.moveTo(ox+perp.x*hw, oy+perp.y*hw);
+      ctx.lineTo(ex+perp.x*hw, ey+perp.y*hw);
+      ctx.lineTo(ex-perp.x*hw, ey-perp.y*hw);
+      ctx.lineTo(ox-perp.x*hw, oy-perp.y*hw);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = preview ? 'rgba(220,50,50,.18)' : 'rgba(220,50,50,.28)';
+      _highlightCells(ctx, (px,py)=>_inLine(px,py,ox,oy,dir.x,dir.y,rPx));
+    }
+  }
+  ctx.restore();
+}
+
+function redrawOverlay() {
+  if (!overlayCtx) return;
+  const {width:W, height:H} = overlayCtx.canvas;
+  overlayCtx.clearRect(0, 0, W, H);
+
+  // Committed shapes
+  ms.shapes.forEach(s => _drawShape(overlayCtx, s, false));
+
+  // Live preview (phase 1)
+  if (ms.phase===1 && ms.origin && ms.mousePos && ms.tool) {
+    const dir = ms.tool !== 'circle' ? _dir(ms.origin, ms.mousePos) : {x:1,y:0};
+    _drawShape(overlayCtx, { tool:ms.tool, origin:ms.origin, dir, rangeFt:ms.rangeFt }, true);
+  }
+}
+
+// ─────────────────────────────────────────────
+// MEASURE INTERACTION
+// ─────────────────────────────────────────────
+
+/** Returns the point on the token's circular edge closest to (mx,my) in map coords. */
+function _tokenEdgePoint(tokEl, mx, my) {
+  const size = Number(tokEl.dataset.size)||1;
+  const half = (TOKEN_PX*size)/2;
+  const cx   = parseFloat(tokEl.style.left)+half;
+  const cy   = parseFloat(tokEl.style.top)+half;
+  const dx   = mx-cx, dy = my-cy;
+  const d    = Math.sqrt(dx*dx+dy*dy)||1;
+  return { x: cx+(dx/d)*half, y: cy+(dy/d)*half };
+}
+
+// Capture phase: intercepts left-clicks in measure mode BEFORE token drag starts
+viewport.addEventListener('mousedown', e => {
+  if (e.button !== 0 || !ms.tool) return;
+  e.stopPropagation();   // prevent token drag from starting
+
+  const rect = viewport.getBoundingClientRect();
+  const mm   = screenToMap(e.clientX-rect.left, e.clientY-rect.top);
+
+  if (ms.phase === 0) {
+    // Phase 0→1: set origin (from token edge or map point)
+    const tokEl   = e.target.closest('.token');
+    ms.origin     = tokEl ? _tokenEdgePoint(tokEl, mm.x, mm.y) : { x:mm.x, y:mm.y };
+    ms.phase      = 1;
+    viewport.classList.add('measure-phase-1');
+  } else {
+    // Phase 1→0: commit shape
+    const dir = ms.tool !== 'circle' ? _dir(ms.origin, mm) : { x:1, y:0 };
+    ms.shapes.push({ tool:ms.tool, origin:{...ms.origin}, dir, rangeFt:ms.rangeFt });
+    ms.phase = 0; ms.origin = null;
+    viewport.classList.remove('measure-phase-1');
+    redrawOverlay();
+  }
+}, true /* capture */);
+
+// Preview update on mouse move
+viewport.addEventListener('mousemove', e => {
+  if (!ms.tool || ms.phase !== 1) return;
+  const rect = viewport.getBoundingClientRect();
+  ms.mousePos = screenToMap(e.clientX-rect.left, e.clientY-rect.top);
+  redrawOverlay();
+});
+
+// Escape to cancel current phase
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && ms.phase === 1) {
+    ms.phase = 0; ms.origin = null;
+    viewport.classList.remove('measure-phase-1');
+    redrawOverlay();
+  }
+});
+
+// ─────────────────────────────────────────────
+// HUD MEASURE CONTROLS
+// ─────────────────────────────────────────────
+
+function _setMeasureTool(tool) {
+  ms.tool   = ms.tool === tool ? null : tool;  // toggle off if same
+  ms.phase  = 0; ms.origin = null;
+  viewport.classList.toggle('measure-mode', !!ms.tool);
+  viewport.classList.remove('measure-phase-1');
+  ['btnMeasureLine','btnMeasureCone','btnMeasureCircle'].forEach(id => {
+    $(id)?.classList.remove('active');
+  });
+  if (ms.tool === 'line')   $('btnMeasureLine')?.classList.add('active');
+  if (ms.tool === 'cone')   $('btnMeasureCone')?.classList.add('active');
+  if (ms.tool === 'circle') $('btnMeasureCircle')?.classList.add('active');
+  $('measureRangePanel')?.classList.toggle('hidden', !ms.tool);
+  redrawOverlay();
+}
+
+$('btnMeasureLine')?.addEventListener('click',   () => _setMeasureTool('line'));
+$('btnMeasureCone')?.addEventListener('click',   () => _setMeasureTool('cone'));
+$('btnMeasureCircle')?.addEventListener('click', () => _setMeasureTool('circle'));
+
+$('btnMeasureClear')?.addEventListener('click', () => {
+  ms.shapes = []; ms.phase = 0; ms.origin = null;
+  viewport.classList.remove('measure-phase-1');
+  redrawOverlay();
+});
+
+const _rangeInput = $('measureRange');
+_rangeInput?.addEventListener('change', () => {
+  let v = Math.round((parseInt(_rangeInput.value)||5) / 5) * 5;
+  v = Math.max(5, v);
+  ms.rangeFt = v;
+  _rangeInput.value = v;
+  redrawOverlay();
+});
